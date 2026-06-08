@@ -112,7 +112,8 @@ class ScamGuardHandler(SimpleHTTPRequestHandler):
 
 
 def main():
-    # 雲端平台（如 Render）以環境變數 PORT 指定埠並需綁 0.0.0.0；本機維持 127.0.0.1。
+    # 預設本機 127.0.0.1:8765；若 8765 被占用或想對外，可用環境變數 PORT 指定
+    # （設了 PORT 會綁 0.0.0.0 方便區網/通道存取）。
     port = int(os.environ.get("PORT", "8765"))
     host = "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1"
     write_log(f"starting server root={ROOT}")

@@ -4,6 +4,39 @@
 
 > 📖 系統如何運作、資料來源與完整流程：見 **[HOW_IT_WORKS.md](HOW_IT_WORKS.md)**。
 
+## 快速開始（下載後執行）
+
+**需求**：Python 3.10 以上。本專案只用 Python 標準庫，**不需 `pip install`**。
+
+**1. 取得程式**
+
+```bash
+git clone https://github.com/jerry950627/secondhand-scam-guard.git
+cd secondhand-scam-guard
+```
+
+（或在 GitHub 頁面按 **Code → Download ZIP**，解壓後進入資料夾。）
+
+**2. 啟動伺服器**
+
+```bash
+python server.py        # Windows
+python3 server.py       # macOS / Linux
+```
+
+看到「已啟動」訊息後，瀏覽器打開 **http://127.0.0.1:8765** 即可使用。
+（Windows 也可直接執行 `.\Start-UI.ps1`，會順便嘗試啟動 Ollama。）
+
+**3.（可選）開啟 4B LLM 語意研判**
+
+預設是**純規則模式**——完全離線、功能完整。若想多一層 LLM 研判，先在本機安裝 [Ollama](https://ollama.com) 並拉模型：
+
+```bash
+ollama pull gemma3:4b
+```
+
+伺服器偵測到本機 `localhost:11434` 有模型就會自動加入 LLM 研判；接不到也不影響，會留在規則模式。
+
 ## 架構
 
 採**混合式**研判，兩層互補：
@@ -90,19 +123,6 @@ $env:SCAM_LLM_ENABLED = "0"               # 強制純規則模式
 用 `http://127.0.0.1:8765/api/health` 確認 `llm_available` 狀態。
 
 **融合策略**：規則引擎永遠跑（離線、可解釋、附 RAG 引用），LLM 在可用時加入並**取較高風險**（保守）。實測 LLM 能抓到規則漏掉的無關鍵字話術，例如「直接匯到私人帳號繞過平台」規則判低、LLM 判高 → 綜合取高。LLM 失敗會自動重試一次，仍失敗則降級純規則模式。
-
-## 線上部署（Render + Groq，永久公開連結）
-
-可把 `server.py`（同時提供 API 與前端）部署到 Render 免費方案，取得固定公開網址讓任何人直接使用。雲端沒有本機 Ollama，改接 **Groq** 的免費 OpenAI 相容 API 提供語意研判；連不到或未設 key 時會自動降級為純規則模式，服務不會壞。
-
-1. **申請 Groq 免費 key**：<https://console.groq.com/keys> 註冊並建立 API key（`gsk_...`）。
-2. **用 Blueprint 部署**：<https://render.com> 以 GitHub 登入 → **New → Blueprint** → 選此 repo → **Apply**（會讀取 `render.yaml`）。
-3. **填入金鑰**：部署時 Dashboard 會要求 `SCAM_LLM_API_KEY`，貼上 Groq key。
-4. 約 2–3 分鐘後取得固定網址（免費方案閒置會休眠，首次喚醒約 30–50 秒）。
-
-> 線上 demo：（部署完成後把網址填在這裡）
-
-模型可在 `render.yaml` 的 `SCAM_LLM_MODEL` 調整（預設 `llama-3.3-70b-versatile`）。
 
 ## 啟動本機 UI
 
