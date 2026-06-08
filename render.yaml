@@ -1,0 +1,34 @@
+# Render Blueprint：一鍵部署「二手交易 AI 防踩雷助理」
+#
+# 用法：
+#   1. 先到 https://console.groq.com/keys 申請免費 Groq API key（OpenAI 相容）。
+#   2. Render → New → Blueprint → 連到此 GitHub repo → Apply。
+#   3. 部署時 Dashboard 會要求填 SCAM_LLM_API_KEY，貼上 Groq key 即可。
+#
+# 雲端沒有本機 Ollama，改以 Groq 的 OpenAI 相容端點提供 4B 等級語意研判；
+# 若 key 未設或 Groq 不可用，會自動降級為純規則模式，服務不會壞。
+
+services:
+  - type: web
+    name: secondhand-scam-guard
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.4"
+      - key: SCAM_LLM_ENABLED
+        value: auto
+      - key: SCAM_LLM_API
+        value: openai
+      - key: SCAM_LLM_BASE_URL
+        value: https://api.groq.com/openai
+      - key: SCAM_LLM_MODEL
+        value: llama-3.3-70b-versatile
+      - key: SCAM_LLM_TIMEOUT
+        value: "30"
+      # 不寫進 repo，部署時於 Render Dashboard 手動填入。
+      - key: SCAM_LLM_API_KEY
+        sync: false

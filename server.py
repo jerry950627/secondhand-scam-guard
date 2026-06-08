@@ -1,6 +1,7 @@
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
+import os
 from pathlib import Path
 import traceback
 from urllib.parse import parse_qs, unquote
@@ -111,8 +112,9 @@ class ScamGuardHandler(SimpleHTTPRequestHandler):
 
 
 def main():
-    host = "127.0.0.1"
-    port = 8765
+    # 雲端平台（如 Render）以環境變數 PORT 指定埠並需綁 0.0.0.0；本機維持 127.0.0.1。
+    port = int(os.environ.get("PORT", "8765"))
+    host = "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1"
     write_log(f"starting server root={ROOT}")
     server = ThreadingHTTPServer((host, port), ScamGuardHandler)
     write_log(f"listening http://{host}:{port}")
