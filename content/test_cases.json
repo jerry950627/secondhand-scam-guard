@@ -1,0 +1,50 @@
+[
+  {
+    "id": "low-risk",
+    "label": "低風險：一般面交交易",
+    "input_text": "FB 社團貼文：出售二手鍵盤 NT$800，台北捷運站面交，可現場測試，不接受先匯款。私訊可看更多照片。",
+    "expected_level": "低"
+  },
+  {
+    "id": "high-risk",
+    "label": "高風險：假買家金流驗證",
+    "input_text": "買家說無法下單，要求我加 LINE 客服，客服說賣家未完成金流驗證，要點賣貨便連結並操作網路銀行解除帳戶凍結。",
+    "expected_level": "高"
+  },
+  {
+    "id": "medium-risk",
+    "label": "中風險：價格偏低但資訊不足",
+    "input_text": "Threads 上有人賣 iPhone 15 Pro 只要 NT$9000，說很多人問，要先付 NT$1000 訂金才保留，可以寄送但不方便面交。",
+    "expected_level": "中"
+  },
+  {
+    "id": "evasion-split",
+    "label": "高風險：拆字規避（金．流．驗．證）",
+    "input_text": "客服請我操作網．路．銀．行做金．流．驗．證，才能解除帳戶凍結。",
+    "expected_level": "高"
+  },
+  {
+    "id": "synonym-variants",
+    "label": "高風險：同義詞變體（轉帳／加賴／交易驗證）",
+    "input_text": "賣家要我先轉帳訂金到他帳戶，還要我加賴給客服做交易驗證。",
+    "expected_level": "高"
+  },
+  {
+    "id": "legit-shopee",
+    "label": "低風險：正常蝦皮交易完成",
+    "input_text": "蝦皮下單後賣家正常出貨，今天已收到商品，東西完好給了好評。",
+    "expected_level": "低"
+  },
+  {
+    "id": "greeting-only",
+    "label": "低風險：純問候詢問",
+    "input_text": "你好，請問這個還在嗎？想約週末面交看看。",
+    "expected_level": "低"
+  },
+  {
+    "id": "blank-input",
+    "label": "低風險：空白輸入邊界",
+    "input_text": "   ",
+    "expected_level": "低"
+  }
+]

@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>二手交易 AI 防踩雷助理</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div class="brand-lockup">
+            <div>
+              <p class="eyebrow">期末專案｜二手交易防詐風險分析</p>
+              <h1>二手交易 AI 防踩雷助理</h1>
+            </div>
+          </div>
+          <div class="status-pill" id="serverStatus" role="status" aria-live="polite">本機模式</div>
+        </header>
+
+        <section class="hero-panel">
+          <div class="hero-copy">
+            <span class="section-label">專案功能</span>
+            <h2>把 FB／Threads 二手交易訊息，整理成可查證的防詐報告</h2>
+            <p>貼上交易貼文、私訊或截圖 OCR 文字後，系統會標出可疑話術、判斷風險等級、列出查證問題，並保留 RAG 引用與推理軌跡供課堂 demo 說明。</p>
+          </div>
+          <div class="feature-grid" aria-label="專案功能清單">
+            <article class="feature-item">
+              <span>01</span>
+              <strong>截圖 OCR 與文字清理</strong>
+              <p>可放入交易截圖，將辨識後的對話整理成較乾淨的分析文字。</p>
+            </article>
+            <article class="feature-item">
+              <span>02</span>
+              <strong>風險分級與原文標註</strong>
+              <p>用規則與模型輔助判斷低、中、高風險，並標出命中的可疑句子。</p>
+            </article>
+            <article class="feature-item">
+              <span>03</span>
+              <strong>RAG 引用與推理軌跡</strong>
+              <p>顯示參考依據、pseudo-query 與 HyDE，讓報告不是只有一句結論。</p>
+            </article>
+            <article class="feature-item">
+              <span>04</span>
+              <strong>查核與報告輸出</strong>
+              <p>快速檢查連結、電話與黑名單，並可複製摘要或下載文字報告。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="work-grid">
+          <section class="input-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>交易內容</h2>
+              </div>
+              <button class="icon-button" id="clearButton" type="button" title="清空輸入">清空</button>
+            </div>
+
+            <div class="capture-panel" id="capturePanel">
+              <div class="capture-toolbar">
+                <div>
+                  <h3>截圖暫存區</h3>
+                  <p>可預覽截圖；分析仍以文字欄為準。</p>
+                </div>
+                <label class="secondary-button file-picker" for="imageInput">選擇圖片</label>
+                <input id="imageInput" type="file" accept="image/*" hidden />
+              </div>
+              <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="貼上或拖曳交易截圖">
+                <div class="drop-empty" id="dropEmpty">
+                  <strong>貼上或拖曳截圖</strong>
+                  <span>按「辨識文字」可 OCR 轉文字，首次使用需連網下載語言包。</span>
+                </div>
+                <img id="imagePreview" alt="交易截圖預覽" hidden />
+              </div>
+              <div class="capture-actions">
+                <button class="secondary-button compact-button" id="ocrButton" type="button" disabled>辨識文字 OCR</button>
+                <button class="secondary-button compact-button" id="cleanTextButton" type="button">清理文字</button>
+                <button class="secondary-button compact-button" id="clearImageButton" type="button" disabled>清除圖片</button>
+                <span class="image-status" id="imageStatus">尚未載入圖片</span>
+              </div>
+            </div>
+
+            <textarea id="tradeText" spellcheck="false" aria-label="交易內容文字" placeholder="貼上交易貼文、私訊內容，或 VLM/OCR 從截圖抽出的文字。"></textarea>
+
+            <div class="sample-row">
+              <button class="sample-button" data-sample="low" type="button">低風險</button>
+              <button class="sample-button" data-sample="medium" type="button">中風險</button>
+              <button class="sample-button" data-sample="high" type="button">高風險</button>
+            </div>
+
+            <div class="action-row">
+              <button class="primary-button" id="analyzeButton" type="button">分析風險</button>
+            </div>
+
+            <p class="error-banner" id="errorBanner" role="alert" hidden></p>
+
+            <div class="quick-check">
+              <h3>貼連結 / 電話快速查</h3>
+              <p class="quick-check-hint">不用打整段文字，直接貼可疑網址或電話即可查（比對官方黑名單 + 風險判斷）。</p>
+              <div class="quick-check-row">
+                <input id="quickLinkInput" type="text" inputmode="url" spellcheck="false"
+                  aria-label="可疑網址或電話"
+                  placeholder="例如 http://shopee-tw.xyz/pay 或 0900111222" />
+                <button class="secondary-button compact-button" id="quickCheckButton" type="button">查詐騙</button>
+              </div>
+              <button class="link-button" id="quickExampleButton" type="button">試試範例（已知詐騙網址）↗</button>
+              <div class="quick-check-result" id="quickCheckResult" hidden></div>
+            </div>
+          </section>
+
+          <section class="result-panel" id="resultPanel">
+            <div class="panel-heading">
+              <div>
+                <h2>風險報告</h2>
+              </div>
+              <div class="heading-actions">
+                <button class="icon-button" id="copySummaryButton" type="button" disabled>複製摘要</button>
+                <button class="icon-button" id="copyQuestionsButton" type="button" disabled>複製查證問題</button>
+                <button class="icon-button" id="downloadTextButton" type="button" disabled>下載文字報告</button>
+                <button class="icon-button" id="printButton" type="button" disabled>列印 / PDF</button>
+                <button class="icon-button subtle-action" id="downloadButton" type="button" disabled>下載 JSON</button>
+                <span class="timestamp" id="timestamp">尚未分析</span>
+              </div>
+            </div>
+
+            <div class="score-card neutral" id="scoreCard">
+              <span>風險等級</span>
+              <strong id="riskLevel">等待輸入</strong>
+              <div class="meter" id="meter" role="progressbar" aria-label="風險分數" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="meterFill"></div></div>
+            </div>
+
+            <div class="synthesis" id="synthesis" hidden>
+              <div class="synthesis-head">
+                <span class="mode-badge" id="modeBadge">規則模式</span>
+                <span class="confidence" id="llmConfidence"></span>
+              </div>
+              <p class="synthesis-note" id="synthesisNote"></p>
+              <ul class="llm-reasons" id="llmReasons"></ul>
+              <div class="compare" id="comparePanel">
+                <div class="compare-col">
+                  <span>規則引擎（RAG）</span>
+                  <strong id="cmpRules">—</strong>
+                </div>
+                <div class="compare-col">
+                  <span>4B LLM</span>
+                  <strong id="cmpLlm">未啟用</strong>
+                </div>
+              </div>
+            </div>
+
+            <div class="result-section" id="highlightSection" hidden>
+              <h3>命中話術（原文標註）</h3>
+              <div class="highlight-text" id="highlightText"></div>
+            </div>
+
+            <div class="result-section">
+              <h3>可疑訊號</h3>
+              <div class="chips" id="signals"></div>
+            </div>
+
+            <div class="result-section">
+              <h3>RAG 引用依據</h3>
+              <div class="evidence-list" id="evidenceList"></div>
+            </div>
+
+            <div class="result-section two-col">
+              <div>
+                <h3>建議行動</h3>
+                <ul id="actions"></ul>
+              </div>
+              <div>
+                <h3>查證問題</h3>
+                <ul id="questions"></ul>
+              </div>
+            </div>
+
+            <div class="result-section next-step-card" id="nextStepCard" hidden>
+              <div>
+                <h3>下一步</h3>
+                <p id="nextStepText">尚未產生。</p>
+              </div>
+            </div>
+
+            <div class="result-section" id="linkCheckSection" hidden>
+              <h3>連結與電話查核（黑名單比對）</h3>
+              <div class="link-check-list" id="linkCheckList"></div>
+            </div>
+
+            <div class="result-section">
+              <h3>查證管道（這是不是詐騙？）</h3>
+              <div class="verify-links">
+                <a class="verify-link" href="tel:165">
+                  <strong>☎ 撥打 165</strong>
+                  <span>反詐騙諮詢專線，真人協助查證</span>
+                </a>
+                <a class="verify-link" href="https://165.npa.gov.tw/" target="_blank" rel="noreferrer">
+                  <strong>165 全民防騙網 ↗</strong>
+                  <span>查詐騙手法、線上報案與最新警示</span>
+                </a>
+                <a class="verify-link" href="https://165dashboard.tw/" target="_blank" rel="noreferrer">
+                  <strong>165 打詐儀表板 ↗</strong>
+                  <span>查可疑網址、電話、帳號與高風險賣場</span>
+                </a>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="detail-panel">
+          <div>
+            <h2>檢索推理軌跡</h2>
+            <p>這一區顯示 pseudo-query 與 HyDE 假想文件，方便報告展示「不是只靠 LLM 直覺回答」。</p>
+          </div>
+          <div class="trace-grid">
+            <div>
+              <h3>pseudo-query</h3>
+              <ol id="pseudoQueries"></ol>
+            </div>
+            <div>
+              <h3>HyDE</h3>
+              <p id="hydeText" class="hyde-text">尚未產生。</p>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

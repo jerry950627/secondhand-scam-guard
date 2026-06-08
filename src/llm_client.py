@@ -1,0 +1,234 @@
+"""可選的 4B LLM 研判層（Ollama / OpenAI 相容），僅用標準庫。
+
+設計原則：永不讓主流程崩潰。連不到模型、逾時或回傳格式錯誤時，
+一律回傳 None，由 orchestrator 退回純規則模式。
+
+環境變數：
+  SCAM_LLM_ENABLED   auto(預設) | 1/true 強制 | 0/false 關閉
+  SCAM_LLM_API       ollama(預設) | openai
+  SCAM_LLM_BASE_URL  預設 http://localhost:11434
+  SCAM_LLM_MODEL     預設 gemma3:4b
+  SCAM_LLM_API_KEY   openai 相容端點用
+  SCAM_LLM_TIMEOUT   秒，預設 30
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+
+VALID_LEVELS = {"低", "中", "高"}
+
+SYSTEM_PROMPT = (
+    "你是台灣二手交易（FB Marketplace、蝦皮、Threads）的防詐風險分析助理。"
+    "依據使用者提供的交易對話或貼文，研判是否為詐騙，特別注意假買家、假客服、"
+    "金流驗證、帳戶凍結、釣魚物流連結、私下加 LINE、先匯訂金、異常低價與急迫話術，"
+    "以及刻意用注音、拆字、錯字規避偵測的手法。"
+    "只輸出 JSON，不要任何其他文字。"
+)
+
+USER_TEMPLATE = (
+    "交易內容：\n{text}\n\n"
+    "已檢索到的防詐依據（供參考，可能為空）：\n{evidence}\n\n"
+    "請輸出 JSON，欄位如下：\n"
+    "{{\n"
+    '  "risk_level": "低" 或 "中" 或 "高",\n'
+    '  "confidence": 0 到 100 的整數,\n'
+    '  "evasion_detected": true 或 false（是否用注音/拆字/錯字規避）,\n'
+    '  "reasons": ["判斷理由，最多3條，每條一句話"],\n'
+    '  "summary": "一句話結論"\n'
+    "}}"
+)
+
+
+@dataclass(frozen=True)
+class LlmConfig:
+    enabled_mode: str
+    api: str
+    base_url: str
+    model: str
+    api_key: str
+    timeout: float
+
+    @classmethod
+    def from_env(cls) -> "LlmConfig":
+        return cls(
+            enabled_mode=os.environ.get("SCAM_LLM_ENABLED", "auto").strip().lower(),
+            api=os.environ.get("SCAM_LLM_API", "ollama").strip().lower(),
+            base_url=os.environ.get("SCAM_LLM_BASE_URL", "http://localhost:11434").rstrip("/"),
+            model=os.environ.get("SCAM_LLM_MODEL", "gemma3:4b").strip(),
+            api_key=os.environ.get("SCAM_LLM_API_KEY", "").strip(),
+            timeout=float(os.environ.get("SCAM_LLM_TIMEOUT", "60")),
+        )
+
+
+@dataclass(frozen=True)
+class LlmVerdict:
+    level: str
+    confidence: int
+    evasion_detected: bool
+    reasons: list[str]
+    summary: str
+    model: str
+
+
+def _http_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _extract_json(content: str) -> dict | None:
+    """從模型輸出中抽出第一個 JSON 物件（4B 模型有時會夾雜文字）。"""
+    content = content.strip()
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", content, re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+
+
+def _normalize_level(raw: object) -> str | None:
+    text = str(raw).strip()
+    # 依風險高→低判斷，模型回傳含多個等級字（如「中高」）時保守取較高，
+    # 且結果不依賴 set 迭代順序。
+    for level in ("高", "中", "低"):
+        if level in text:
+            return level
+    mapping = {"low": "低", "medium": "中", "mid": "中", "high": "高"}
+    return mapping.get(text.lower())
+
+
+def _to_verdict(parsed: dict, model: str) -> LlmVerdict | None:
+    level = _normalize_level(parsed.get("risk_level"))
+    if level is None:
+        return None
+    try:
+        confidence = int(float(parsed.get("confidence", 0)))
+    except (TypeError, ValueError):
+        confidence = 0
+    reasons_raw = parsed.get("reasons") or []
+    if isinstance(reasons_raw, str):
+        reasons_raw = [reasons_raw]
+    reasons = [str(item).strip() for item in reasons_raw if str(item).strip()][:3]
+    return LlmVerdict(
+        level=level,
+        confidence=max(0, min(100, confidence)),
+        evasion_detected=bool(parsed.get("evasion_detected", False)),
+        reasons=reasons,
+        summary=str(parsed.get("summary", "")).strip(),
+        model=model,
+    )
+
+
+def _build_user_prompt(text: str, evidence: list[dict]) -> str:
+    if evidence:
+        lines = [f"- {item['title']}：{item.get('matched_signals') or '語意相近'}" for item in evidence]
+        evidence_text = "\n".join(lines)
+    else:
+        evidence_text = "（無）"
+    return USER_TEMPLATE.format(text=text, evidence=evidence_text)
+
+
+def _call_ollama(config: LlmConfig, prompt: str) -> str:
+    payload = {
+        "model": config.model,
+        "format": "json",
+        "stream": False,
+        "options": {"temperature": 0},
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    result = _http_json(
+        f"{config.base_url}/api/chat",
+        payload,
+        {"Content-Type": "application/json"},
+        config.timeout,
+    )
+    return result.get("message", {}).get("content", "")
+
+
+def _call_openai(config: LlmConfig, prompt: str) -> str:
+    headers = {"Content-Type": "application/json"}
+    if config.api_key:
+        headers["Authorization"] = f"Bearer {config.api_key}"
+    payload = {
+        "model": config.model,
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    result = _http_json(
+        f"{config.base_url}/v1/chat/completions",
+        payload,
+        headers,
+        config.timeout,
+    )
+    # 安全取值：端點回傳畸形（choices 為空/None、缺 message）時回空字串，
+    # 交由上層 _extract_json 判為 None 並退回規則模式，不讓主流程崩潰。
+    choices = result.get("choices") or []
+    if not choices:
+        return ""
+    return (choices[0] or {}).get("message", {}).get("content", "")
+
+
+def is_available(config: LlmConfig | None = None) -> bool:
+    config = config or LlmConfig.from_env()
+    if config.enabled_mode in {"0", "false", "off", "no"}:
+        return False
+    probe_url = (
+        f"{config.base_url}/api/tags"
+        if config.api == "ollama"
+        else f"{config.base_url}/v1/models"
+    )
+    try:
+        request = urllib.request.Request(probe_url, method="GET")
+        if config.api_key:
+            request.add_header("Authorization", f"Bearer {config.api_key}")
+        with urllib.request.urlopen(request, timeout=3):
+            return True
+    except (urllib.error.URLError, OSError, ValueError):
+        return config.enabled_mode in {"1", "true", "on", "yes"}
+
+
+def run_llm(text: str, evidence: list[dict], config: LlmConfig | None = None) -> LlmVerdict | None:
+    """呼叫 LLM 研判。任何失敗都回傳 None，由上層退回規則模式。
+
+    對暫時性失敗（逾時、連線中斷、輸出非 JSON）重試一次，降低偶發 None。
+    """
+    config = config or LlmConfig.from_env()
+    if config.enabled_mode in {"0", "false", "off", "no"}:
+        return None
+    prompt = _build_user_prompt(text, evidence)
+    for attempt in range(2):
+        try:
+            content = (
+                _call_ollama(config, prompt)
+                if config.api == "ollama"
+                else _call_openai(config, prompt)
+            )
+        except (urllib.error.URLError, OSError, KeyError, IndexError, TypeError, ValueError, TimeoutError):
+            continue
+        parsed = _extract_json(content or "")
+        if parsed is None:
+            continue
+        verdict = _to_verdict(parsed, config.model)
+        if verdict is not None:
+            return verdict
+    return None

@@ -1,0 +1,21 @@
+# 執行期產物
+.server.pid
+server.log
+
+# Python 測試 / 快取
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Office 暫存鎖檔
+~$*
+
+# 開發過程產物（非繳交內容）
+outputs/
+
+# Claude Code 本機設定
+.claude/
+
+# OS
+Thumbs.db
+.DS_Store
