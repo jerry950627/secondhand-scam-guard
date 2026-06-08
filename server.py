@@ -17,8 +17,12 @@ MAX_TEXT_CHARS = 8000  # 分析文字長度上限
 
 
 def write_log(message):
-    with LOG_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(message + "\n")
+    try:
+        with LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(message + "\n")
+    except OSError:
+        # 寫 log 失敗（例如解壓到唯讀資料夾）不應讓伺服器崩潰。
+        pass
 
 
 def load_demo_module():
@@ -117,7 +121,15 @@ def main():
     port = int(os.environ.get("PORT", "8765"))
     host = "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1"
     write_log(f"starting server root={ROOT}")
-    server = ThreadingHTTPServer((host, port), ScamGuardHandler)
+    try:
+        server = ThreadingHTTPServer((host, port), ScamGuardHandler)
+    except OSError as exc:
+        # 最常見：連接埠被占用。給清楚的提示，而不是丟一串 traceback。
+        print(f"無法在 {host}:{port} 啟動（{exc}）。", flush=True)
+        print(f"連接埠 {port} 可能已被占用；換一個埠再試，例如：", flush=True)
+        print('  PowerShell:  $env:PORT=9000; python server.py', flush=True)
+        print('  macOS/Linux: PORT=9000 python3 server.py', flush=True)
+        raise SystemExit(1)
     write_log(f"listening http://{host}:{port}")
     print(f"二手交易 AI 防踩雷助理已啟動：http://{host}:{port}", flush=True)
     server.serve_forever()
