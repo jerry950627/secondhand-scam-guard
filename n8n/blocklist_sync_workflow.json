@@ -1,0 +1,63 @@
+{
+  "name": "二手交易 AI 防踩雷助理：黑名單每日同步",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-daily-0800",
+      "name": "Schedule: 每天 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-640, 0]
+    },
+    {
+      "parameters": {
+        "command": "python tools/sync_blocklist.py"
+      },
+      "id": "exec-sync-blocklist",
+      "name": "Execute: 更新詐騙黑名單（官方開放資料）",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [-320, 0]
+    }
+  ],
+  "connections": {
+    "Schedule: 每天 08:00": {
+      "main": [
+        [
+          {
+            "node": "Execute: 更新詐騙黑名單（官方開放資料）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "final-project"
+    },
+    {
+      "name": "anti-fraud"
+    },
+    {
+      "name": "schedule"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-06-15T00:00:00.000Z",
+  "versionId": "blocklist-sync-v1"
+}

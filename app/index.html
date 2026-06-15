@@ -7,6 +7,30 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <div class="mode-modal" id="modeModal" role="dialog" aria-modal="true" aria-labelledby="modeModalTitle" hidden>
+      <div class="mode-modal-card">
+        <h2 id="modeModalTitle">選擇研判模式</h2>
+        <p class="mode-modal-sub">離線版完全在本機運作；線上版用雲端 Gemini（API key 僅本次使用、不儲存）。</p>
+        <div class="mode-choices">
+          <button class="mode-choice" type="button" data-mode="offline">
+            <strong>離線版</strong>
+            <span>規則＋知識庫＋本機 Ollama 4B＋tesseract OCR，全離線、免金鑰。</span>
+          </button>
+          <button class="mode-choice" type="button" data-mode="online">
+            <strong>線上版</strong>
+            <span>雲端 Gemini 2.5 Flash（含看截圖 VLM），需自備 API key。</span>
+          </button>
+        </div>
+        <div class="mode-key-row" id="modeKeyRow" hidden>
+          <label for="geminiKeyInput">Gemini API key（不儲存）</label>
+          <input id="geminiKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="貼上你的 Gemini API key" />
+          <p class="mode-key-hint">於 Google AI Studio 取得；僅本次分析使用，不會存到伺服器或瀏覽器。</p>
+        </div>
+        <div class="mode-modal-actions">
+          <button id="modeConfirm" class="primary-button" type="button" disabled>開始使用</button>
+        </div>
+      </div>
+    </div>
     <main class="app-shell">
       <section class="workspace">
         <header class="topbar">
@@ -16,7 +40,10 @@
               <h1>二手交易 AI 防踩雷助理</h1>
             </div>
           </div>
-          <div class="status-pill" id="serverStatus" role="status" aria-live="polite">本機模式</div>
+          <div class="header-controls">
+            <button class="mode-switch-button" id="modeSwitchButton" type="button" title="切換離線/線上模式">切換模式</button>
+            <div class="status-pill" id="serverStatus" role="status" aria-live="polite">本機模式</div>
+          </div>
         </header>
 
         <section class="hero-panel">

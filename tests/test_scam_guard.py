@@ -228,3 +228,108 @@ def test_llm_lenient_json_extraction():
     assert parsed is not None
     verdict = llm_client._to_verdict(parsed, "gemma3:4b")
     assert verdict.level == "高"
+
+
+# --- 離線/線上模式 + Gemini + VLM -----------------------------------
+@pytest.mark.unit
+def test_gemini_config_fields():
+    config = llm_client.gemini_config("abc")
+    assert config.api == "gemini"
+    assert config.model == llm_client.GEMINI_MODEL
+    assert config.base_url == "https://generativelanguage.googleapis.com/v1beta/openai"
+    assert config.enabled_mode == "1"
+    assert config.api_key == "abc"
+
+
+@pytest.mark.unit
+def test_gemini_path_drops_v1_segment(monkeypatch):
+    # Gemini 的 OpenAI 相容路徑是 .../openai/chat/completions（沒有 /v1）。
+    captured = {}
+
+    def fake_http(url, payload, headers, timeout):
+        captured["url"] = url
+        return {"choices": [{"message": {"content": '{"risk_level":"高","confidence":90}'}}]}
+
+    monkeypatch.setattr(llm_client, "_http_json", fake_http)
+    verdict = llm_client.run_llm("測試", [], llm_client.gemini_config("k"))
+    assert verdict is not None and verdict.level == "高"
+    assert captured["url"] == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    assert "/v1/chat/completions" not in captured["url"]
+
+
+@pytest.mark.unit
+def test_select_llm_offline_uses_local_config():
+    config, available = demo._select_llm("offline", "")
+    assert config is demo._LLM_CONFIG
+    assert available == demo._LLM_AVAILABLE
+
+
+@pytest.mark.unit
+def test_select_llm_online_with_key_builds_gemini():
+    config, available = demo._select_llm("online", "  my-key  ")
+    assert available is True
+    assert config is not None
+    assert config.api == "gemini"
+    assert config.model == llm_client.GEMINI_MODEL
+    assert config.base_url == llm_client.GEMINI_BASE_URL
+    assert config.api_key == "my-key"
+
+
+@pytest.mark.unit
+def test_select_llm_online_without_key_disables_llm():
+    config, available = demo._select_llm("online", "   ")
+    assert config is None
+    assert available is False
+
+
+@pytest.mark.integration
+def test_analyze_online_mode_tags_mode_and_model(monkeypatch):
+    verdict = llm_client.LlmVerdict("高", 90, False, ["理由"], "結論", "gemini-2.5-flash")
+    monkeypatch.setattr(demo, "run_llm", lambda text, evidence, config: verdict)
+    result = demo.analyze("這個還在嗎想買", use_llm=True, mode="online", gemini_api_key="k")
+    assert result["分析模式"] == "online"
+    assert result["llm_used"] is True
+    assert result["LLM研判"]["模型"] == "gemini-2.5-flash"
+
+
+@pytest.mark.integration
+def test_analyze_online_without_key_skips_llm(monkeypatch):
+    def must_not_call(*args, **kwargs):
+        pytest.fail("線上版無金鑰時不應呼叫 LLM")
+
+    monkeypatch.setattr(demo, "run_llm", must_not_call)
+    result = demo.analyze("一般面交，不接受先匯款", use_llm=True, mode="online", gemini_api_key="")
+    assert result["llm_used"] is False
+    assert result["分析模式"] == "online"
+
+
+@pytest.mark.integration
+def test_analyze_online_failure_notes_fallback(monkeypatch):
+    monkeypatch.setattr(demo, "run_llm", lambda *a, **k: None)
+    result = demo.analyze("一般面交，不接受先匯款", use_llm=True, mode="online", gemini_api_key="bad-key")
+    assert result["llm_used"] is False
+    assert "退回規則" in result["綜合說明"]
+
+
+@pytest.mark.unit
+def test_transcribe_image_empty_key_returns_none():
+    assert llm_client.transcribe_image("data:image/png;base64,AAAA", "") is None
+
+
+@pytest.mark.unit
+def test_transcribe_image_success(monkeypatch):
+    monkeypatch.setattr(
+        llm_client,
+        "_http_json",
+        lambda url, payload, headers, timeout: {"choices": [{"message": {"content": "轉錄文字"}}]},
+    )
+    assert llm_client.transcribe_image("data:image/png;base64,AAAA", "key") == "轉錄文字"
+
+
+@pytest.mark.unit
+def test_transcribe_image_network_failure_returns_none(monkeypatch):
+    def boom(*args, **kwargs):
+        raise OSError("down")
+
+    monkeypatch.setattr(llm_client, "_http_json", boom)
+    assert llm_client.transcribe_image("data:image/png;base64,AAAA", "key") is None

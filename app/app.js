@@ -52,7 +52,12 @@ const el = {
   quickLinkInput: document.querySelector("#quickLinkInput"),
   quickCheckButton: document.querySelector("#quickCheckButton"),
   quickExampleButton: document.querySelector("#quickExampleButton"),
-  quickCheckResult: document.querySelector("#quickCheckResult")
+  quickCheckResult: document.querySelector("#quickCheckResult"),
+  modeModal: document.querySelector("#modeModal"),
+  modeKeyRow: document.querySelector("#modeKeyRow"),
+  geminiKeyInput: document.querySelector("#geminiKeyInput"),
+  modeConfirm: document.querySelector("#modeConfirm"),
+  modeSwitchButton: document.querySelector("#modeSwitchButton")
 };
 
 let lastResult = null;
@@ -61,6 +66,9 @@ let currentImageFile = null;
 let tesseractLoader = null;
 let llmAvailable = false;
 let analyzeSeq = 0;
+let currentMode = null;   // "offline" | "online"，由啟動 modal 決定
+let geminiKey = "";       // 線上版金鑰：僅存記憶體、不寫 localStorage、重整即清
+let pendingMode = null;   // modal 內暫存的選擇
 
 // state: "ok"（已連線/完成）｜"busy"（分析中）｜"err"（未連線/失敗），決定狀態列左側色條。
 function setServerStatus(text, state = "ok") {
@@ -78,11 +86,86 @@ async function checkHealth() {
     const response = await fetch("/api/health");
     const data = await response.json();
     llmAvailable = Boolean(data.llm_available);
-    setReadyStatus();
+    // 已選好模式就由 applyModeStatus 顯示，避免覆蓋掉「離線/雲端模式」字樣。
+    if (!currentMode) setReadyStatus();
+    else applyModeStatus();
   } catch {
     llmAvailable = false;
     setServerStatus("伺服器未連線", "err");
   }
+}
+
+// ---- 離線/線上模式：啟動 modal 與狀態 ----
+
+function applyModeStatus() {
+  if (currentMode === "online") {
+    setServerStatus("雲端模式（Gemini）", "ok");
+    el.ocrButton.textContent = "用 Gemini 看圖";
+  } else {
+    setServerStatus("離線模式（本機）", "ok");
+    el.ocrButton.textContent = "辨識文字 OCR";
+  }
+}
+
+function shouldUseLlm() {
+  return currentMode === "online" ? Boolean(geminiKey) : llmAvailable;
+}
+
+function refreshModeConfirm() {
+  const ready = pendingMode === "offline"
+    || (pendingMode === "online" && el.geminiKeyInput.value.trim().length > 0);
+  el.modeConfirm.disabled = !ready;
+}
+
+function selectPendingMode(mode) {
+  pendingMode = mode;
+  for (const btn of el.modeModal.querySelectorAll(".mode-choice")) {
+    btn.classList.toggle("active", btn.dataset.mode === mode);
+  }
+  el.modeKeyRow.hidden = mode !== "online";
+  if (mode === "online") el.geminiKeyInput.focus();
+  refreshModeConfirm();
+}
+
+function openModeModal() {
+  pendingMode = currentMode;
+  el.geminiKeyInput.value = geminiKey;   // 同一 session 重開時回填，仍只在記憶體
+  if (currentMode) selectPendingMode(currentMode);
+  else {
+    pendingMode = null;
+    for (const btn of el.modeModal.querySelectorAll(".mode-choice")) btn.classList.remove("active");
+    el.modeKeyRow.hidden = true;
+    el.modeConfirm.disabled = true;
+  }
+  el.modeModal.hidden = false;
+}
+
+function closeModeModal() {
+  el.modeModal.hidden = true;
+}
+
+function confirmMode() {
+  if (!pendingMode) return;
+  currentMode = pendingMode;
+  geminiKey = currentMode === "online" ? el.geminiKeyInput.value.trim() : "";
+  closeModeModal();
+  applyModeStatus();
+}
+
+function initModeModal() {
+  for (const btn of el.modeModal.querySelectorAll(".mode-choice")) {
+    btn.addEventListener("click", () => selectPendingMode(btn.dataset.mode));
+  }
+  el.geminiKeyInput.addEventListener("input", refreshModeConfirm);
+  el.geminiKeyInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !el.modeConfirm.disabled) confirmMode();
+  });
+  el.modeConfirm.addEventListener("click", confirmMode);
+  el.modeSwitchButton.addEventListener("click", openModeModal);
+  // 已選過模式才允許點背景關閉（避免首次未選就略過）。
+  el.modeModal.addEventListener("click", (event) => {
+    if (event.target === el.modeModal && currentMode) closeModeModal();
+  });
 }
 
 const TESSERACT_CDN = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
@@ -223,6 +306,74 @@ async function runOcr() {
     el.ocrButton.textContent = original;
     el.ocrButton.disabled = !currentImageFile;
   }
+}
+
+// 上傳前在前端縮圖壓縮，降低 payload 與 Gemini 成本（最長邊 maxEdge、JPEG quality）。
+function downscaleImage(file, maxEdge = 1280, quality = 0.8) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("無法讀取圖片"));
+    };
+    img.src = url;
+  });
+}
+
+// 線上版：截圖交給後端代呼叫 Gemini 多模態（VLM）逐字轉錄。
+async function runVlm() {
+  if (!currentImageFile) return;
+  if (!geminiKey) {
+    showError("線上版看圖需先輸入 Gemini API key。");
+    openModeModal();
+    return;
+  }
+  clearError();
+  el.ocrButton.disabled = true;
+  const original = el.ocrButton.textContent;
+  el.ocrButton.textContent = "看圖中...";
+  setImageStatus("Gemini 看圖辨識中...");
+  try {
+    const dataUrl = await downscaleImage(currentImageFile);
+    const response = await fetch("/api/vlm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: dataUrl, geminiKey })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "看圖失敗");
+    const text = (data.text || "").trim();
+    if (!text) {
+      setImageStatus("Gemini 未讀到文字，請改用更清晰的截圖。");
+      return;
+    }
+    el.tradeText.value = text;
+    setImageStatus(`Gemini 已讀出 ${text.length} 字，已填入下方文字欄`);
+    el.tradeText.focus();
+  } catch (error) {
+    setImageStatus("看圖失敗");
+    showError(error.message || "Gemini 看圖失敗，請確認金鑰或改用離線 OCR。");
+  } finally {
+    el.ocrButton.textContent = original;
+    el.ocrButton.disabled = !currentImageFile;
+  }
+}
+
+// 依模式分流：離線→tesseract OCR；線上→Gemini VLM。
+function recognizeImage() {
+  return currentMode === "online" ? runVlm() : runOcr();
 }
 
 function showError(message) {
@@ -405,19 +556,24 @@ function renderSynthesis(result, llmPending) {
     ? `${rules["風險等級"]}風險 · ${rules["風險分數"]}`
     : "—";
 
+  const isOnline = result["分析模式"] === "online" || currentMode === "online";
+  const pendLabel = isOnline ? "Gemini 研判中…" : "4B LLM 研判中…";
+
   if (result.llm_used && llm) {
-    el.modeBadge.textContent = `4B LLM 模式 · ${llm["模型"] || "LLM"}`;
+    el.modeBadge.textContent = isOnline
+      ? `雲端 Gemini · ${llm["模型"] || "gemini"}`
+      : `本機 4B LLM · ${llm["模型"] || "LLM"}`;
     el.modeBadge.className = "mode-badge llm";
     el.llmConfidence.textContent = "綜合取較高風險";
     el.cmpLlm.textContent = `${llm["風險等級"]}風險 · 信心 ${llm["信心"]}`;
     el.synthesisNote.textContent = note || "";
     renderList(el.llmReasons, llm["理由"]);
   } else if (llmPending) {
-    el.modeBadge.textContent = "規則即時結果 · 4B LLM 研判中…";
+    el.modeBadge.textContent = `規則即時結果 · ${pendLabel}`;
     el.modeBadge.className = "mode-badge pending";
     el.llmConfidence.textContent = "";
     el.cmpLlm.textContent = "研判中…";
-    el.synthesisNote.textContent = "已用規則引擎即時研判，4B LLM 語意研判中…";
+    el.synthesisNote.textContent = `已用規則引擎即時研判，${pendLabel}`;
     el.llmReasons.innerHTML = "";
   } else {
     el.modeBadge.textContent = "離線規則模式";
@@ -618,7 +774,7 @@ async function postAnalyze(text, withLlm) {
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text })
+    body: JSON.stringify({ text, mode: currentMode || "offline", geminiKey })
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "分析失敗");
@@ -626,6 +782,16 @@ async function postAnalyze(text, withLlm) {
 }
 
 async function analyze() {
+  if (!currentMode) {
+    openModeModal();
+    return;
+  }
+  if (currentMode === "online" && !geminiKey) {
+    showError("請先輸入 Gemini API key。");
+    openModeModal();
+    return;
+  }
+
   const text = el.tradeText.value.trim();
   if (!text) {
     showError("請先輸入交易文字再分析。");
@@ -639,14 +805,15 @@ async function analyze() {
   el.analyzeButton.disabled = true;
   el.analyzeButton.textContent = "分析中...";
   setServerStatus("分析中", "busy");
+  const llmLabel = currentMode === "online" ? "Gemini 研判中" : "4B LLM 研判中";
 
   try {
-    if (llmAvailable) {
-      // 先用規則引擎即時回應，讓報告立刻更新；4B LLM 研判完再覆蓋。
+    if (shouldUseLlm()) {
+      // 先用規則引擎即時回應，讓報告立刻更新；LLM 研判完再覆蓋。
       const fast = await postAnalyze(text, false);
       if (stale()) return;
       renderResult(fast, { llmPending: true });
-      setServerStatus("即時結果已更新 · 語意研判中", "busy");
+      setServerStatus(`即時結果已更新 · ${llmLabel}`, "busy");
 
       const full = await postAnalyze(text, true);
       if (stale()) return;
@@ -704,7 +871,7 @@ el.imageInput.addEventListener("change", (event) => {
 });
 
 el.clearImageButton.addEventListener("click", clearImage);
-el.ocrButton.addEventListener("click", runOcr);
+el.ocrButton.addEventListener("click", recognizeImage);
 el.cleanTextButton.addEventListener("click", cleanTradeText);
 el.printButton.addEventListener("click", () => {
   if (lastResult) window.print();
@@ -763,4 +930,6 @@ el.clearButton.addEventListener("click", () => {
 });
 
 el.tradeText.value = samples.high;
+initModeModal();
+openModeModal();   // 載入時請使用者先選離線/線上模式
 checkHealth();

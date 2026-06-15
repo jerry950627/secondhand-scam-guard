@@ -12,12 +12,16 @@
 
 > 內嵌的 JS 已用 QuickJS（ES2020）實跑，與 Python 引擎在低/中/高、拆字規避、同義詞、解除分期、假投資、正常 COD 等案例上輸出完全一致。pinData 預設帶一筆拆字規避測試輸入，匯入後可直接執行查看結果。
 
+> 註：本機 App 的「線上版」已直接接 Gemini 做截圖 VLM（不經 n8n）；
+> 下列 n8n VLM 升級僅在你想用 n8n 自動化管線時才需要。
+
 若要升級為真 VLM/LLM：
 
 1. 在 Webhook 後加入 Gemini VLM node，讓它讀截圖並輸出 `vlm_text`。
 2. 將 `vlm_text` 傳給 Code node 或 AI Agent。
 3. 用 Simple Vector Store 或 Qdrant 取代 Code node 裡的 `knowledgeBase`。
-4. 高風險時新增 Google Sheet、Email、LINE Notify 或 Telegram 節點做自動通知。
+4. 高風險時新增 Google Sheet、Email、Telegram 或 Discord 節點做自動通知。
+   （LINE Notify 已於 2025-03-31 停止服務，改用 LINE Messaging API 或上述管道。）
 
 PowerShell 或命令列測試時，若輸入 `NT$2500` 這類金額，請使用單引號或跳脫 `$`，避免金額被 shell 當成變數處理。
 
@@ -50,3 +54,32 @@ PowerShell 或命令列測試時，若輸入 `NT$2500` 這類金額，請使用�
 
 > 自動分流（OCR↔VLM）：在 ② 之外，可在 OCR 節點後加一個 **IF 節點**——
 > 當 OCR 抽出的字數過少或信心過低，就改走 Gemini VLM 重新讀圖。
+
+---
+
+## 已提供：黑名單每日同步 workflow — `blocklist_sync_workflow.json`
+
+可直接匯入的排程 workflow，把「n8n 每天 08:00 自動更新詐騙黑名單」做成真：
+
+```
+Schedule Trigger（cron 0 8 * * *）
+  → Execute Command: python tools/sync_blocklist.py
+```
+
+`tools/sync_blocklist.py` 已內建官方開放資料來源（data.gov.tw dataset 176455
+「165 反詐騙_遭停止解析涉詐網站」，約 5.8 萬筆詐騙網域），抓取後併入
+`content/blocklist.json`；**任一來源抓不到都不會清空既有名單**。
+
+匯入後請注意：
+
+1. **工作目錄**：n8n 執行 Execute Command 的 cwd 不一定是本專案根目錄。請把
+   command 改成專案的絕對路徑，例如
+   `python C:\path\to\期末專案\tools\sync_blocklist.py`，或在前面加 `cd`。
+2. **需連網**才能抓 data.gov.tw；離線時可改投 CSV 到
+   `content/blocklist_sources/`（見該夾 README）再讓腳本併入。
+3. **權限**：n8n self-host 需允許 Execute Command 節點。
+4. 只爬**官方／政府開放資料**，不爬 Whoscall、防詐達人等商業服務。
+
+> 純 n8n-native 變體（不依賴 shell）：Schedule → **HTTP Request**（抓 data.gov.tw
+> 下載 URL）→ **Code**（解析 CSV 取「網域」欄、去重）→ **Read/Write Files**
+> 寫回 `content/blocklist.json`。展示性更強，但需在 JS 重做一份解析邏輯。

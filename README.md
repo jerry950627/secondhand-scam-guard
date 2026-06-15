@@ -37,27 +37,36 @@ ollama pull gemma3:4b
 
 伺服器偵測到本機 `localhost:11434` 有模型就會自動加入 LLM 研判；接不到也不影響，會留在規則模式。
 
+**4.（可選）線上版：用雲端 Gemini**
+
+介面載入時會跳視窗讓你選 **離線版／線上版**。線上版改用雲端 Gemini `gemini-2.5-flash`，
+**每次自行輸入** API key（[Google AI Studio](https://aistudio.google.com/app/apikey) 取得），
+金鑰只用於當次請求、**不儲存**。線上版的看截圖改用 **Gemini VLM**（比離線 OCR 更能看懂圖），
+由 `server.py` 代呼叫 Gemini，避免前端直連的 CORS 與金鑰外露。
+
 ## 架構
 
 採**混合式**研判，兩層互補：
 
 1. **離線規則引擎（永遠執行）**：pseudo-query → HyDE → RAG 檢索 → 分級，完全離線、可解釋、附 165／警政署等真實來源引用。輸入會先經過正規化（全形轉半形、拆字規避還原如「金．流．驗．證」、同義詞如「轉帳→匯款」「加賴→LINE」），中文以 bigram 斷詞讓 RAG 重疊真正生效。
-2. **4B LLM 語意研判（可選）**：偵測到本機有 LLM 時自動加入，抓規則漏掉的新話術與規避手法；融合時**取較高風險**（保守）。連不到模型就自動降級為純規則模式，demo 不會壞。
+2. **LLM 語意研判（可選）**：抓規則漏掉的新話術與規避手法；融合時**取較高風險**（保守）。連不到就自動降級為純規則模式，demo 不會壞。**離線版**用本機 `gemma3:4b`、**線上版**用雲端 Gemini `gemini-2.5-flash`（並支援看截圖 VLM）。
 
 ## 主要功能
 
 - **10 類詐騙知識庫**：假買家、假客服金流驗證、釣魚物流、私下交易、異常低價、**解除分期付款（台灣最常見）**、貨到付款換包裹、假投資、代購代儲，外加正常交易守則參考。
 - **原文話術標註**：在原文中標色出觸發風險的字句，連拆字規避（金．流．驗．證）都能標出位置。
 - **連結與電話查核（黑名單比對）**：自動抽出網址/電話，**先比對官方黑名單**（5.8 萬筆 165／刑事局詐騙網域，由 `tools/sync_blocklist.py` 同步），命中即標「已被通報」；沒命中再用啟發式（冒用品牌、原始 IP、短網址、境外電話）+ 話術/LLM 判斷，並附 165／Google 安全瀏覽／VirusTotal 一鍵查證連結。
-- **截圖 OCR**：以 tesseract.js 在前端離線辨識繁中截圖文字（首次使用需連網下載語言包），自動清理介面雜訊。
+- **離線版／線上版切換**：載入時跳視窗選擇——離線版全在本機（規則＋知識庫＋Ollama 4B＋OCR）；線上版用雲端 Gemini（含看截圖 VLM），API key 每次輸入、不儲存。
+- **截圖 OCR／VLM**：離線版以 tesseract.js 在前端離線辨識繁中截圖（首次需連網下載語言包）；線上版改用 Gemini VLM 直接「看懂」截圖並逐字轉錄。
 - **規則 vs LLM 對照**：並排顯示兩種研判，呈現混合式價值。
-- **漸進式渲染**：規則結果毫秒級先顯示，4B LLM 研判完再更新。
+- **漸進式渲染**：規則結果毫秒級先顯示，LLM 研判完再更新。
 - **報告匯出**：JSON / 文字報告下載、複製摘要與查證問題、列印/匯出 PDF。
 
 ## 繳交內容
 
 - `presentation/二手交易AI防踩雷助理.pptx`：7 頁期末簡報。
-- `n8n/secondhand_scam_guard_workflow.json`：可匯入 n8n 的 workflow 範本。
+- `n8n/secondhand_scam_guard_workflow.json`：可匯入 n8n 的判斷層 workflow 範本。
+- `n8n/blocklist_sync_workflow.json`：可匯入 n8n 的黑名單每日同步排程（Schedule → 更新官方黑名單）。
 - `HOW_IT_WORKS.md`：系統運作邏輯與資料來源完整說明。
 - `content/anti_fraud_knowledge_base.json`：RAG 知識庫資料（10 類，含正常交易參考）。
 - `content/blocklist.json`：本地詐騙黑名單快取（官方來源，可每天同步）。
@@ -66,7 +75,7 @@ ollama pull gemma3:4b
 - `src/rules_engine.py`：離線規則引擎（pseudo-query + HyDE + RAG）。
 - `src/text_normalize.py`：正規化、同義詞、拆字規避、中文 bigram 斷詞、話術標註。
 - `src/link_check.py`：連結/電話查核（黑名單優先 → 啟發式 → 查證連結）。
-- `src/llm_client.py`：可選 4B LLM 用戶端（Ollama / OpenAI 相容，純標準庫）。
+- `src/llm_client.py`：LLM 用戶端（Ollama／OpenAI 相容／Gemini，含 VLM 轉錄，純標準庫）。
 - `tools/sync_blocklist.py`：從官方開放資料更新黑名單（可由 n8n 排程）。
 - `tests/test_scam_guard.py`：pytest 測試（37 項）。
 
@@ -158,7 +167,7 @@ http://127.0.0.1:8765
 4. 查看風險等級、可疑訊號、RAG 引用依據、建議行動與查證問題。
 5. 需要保留結果時，可下載文字報告、下載 JSON、複製摘要或列印成 PDF。
 
-截圖可按「辨識文字」用本機 OCR（tesseract.js）自動轉文字；要更強的「看懂圖」可接 n8n 的 Gemini VLM 節點。為什麼本機用 OCR 而非 VLM（離線/隱私/準度取捨）見 HOW_IT_WORKS。
+截圖可按「辨識文字」自動轉文字：**離線版**用本機 OCR（tesseract.js）、**線上版**用 Gemini VLM 直接「看懂」截圖。為什麼離線預設用 OCR 而非 VLM（離線/隱私/準度取捨）見 HOW_IT_WORKS。
 
 ## 更新詐騙黑名單
 
@@ -169,7 +178,7 @@ python tools\sync_blocklist.py            # 從官方來源 + 本地 CSV 更新
 python tools\sync_blocklist.py --add domain shopee-evil.xyz  # 手動加一筆
 ```
 
-可由 n8n「Schedule（每天 08:00）→ Execute Command」自動執行。只爬官方/政府開放資料，不爬 Whoscall 等商業服務。
+可由 n8n「Schedule（每天 08:00）→ Execute Command」自動執行——匯入 `n8n/blocklist_sync_workflow.json` 即可。只爬官方/政府開放資料，不爬 Whoscall 等商業服務。
 
 ## Demo 指令
 

@@ -151,10 +151,26 @@ LLM 在 CPU/GPU 推論需數秒，為了「即時更新」採**兩段式**：
   │  分數與 LLM 欄自動更新             │                                │
 ```
 
-- **漸進式渲染**：先用規則引擎瞬間回應，4B LLM 研判完再覆蓋分數。
+- **漸進式渲染**：先用規則引擎瞬間回應，LLM 研判完再覆蓋分數。
 - **請求序號防錯**：快速連點時舊回應不會蓋掉新結果。
-- `/api/health` 回報 `llm_available`，前端據此決定是否走兩段式。
+- `/api/health` 回報 `llm_available`，前端據此決定離線版是否走兩段式。
 - 伺服器送 `Cache-Control: no-store`，改前端後普通重整即可生效。
+
+### 離線版 / 線上版（載入時 modal 選擇）
+
+前端載入時會跳 modal 讓使用者選模式，請求 body 帶 `mode` 與 `geminiKey`：
+
+| 模式 | LLM | 看截圖 | 金鑰 |
+|------|-----|--------|------|
+| **離線版** | 本機 Ollama `gemma3:4b` | tesseract.js（瀏覽器離線 OCR） | 不需 |
+| **線上版** | 雲端 Gemini `gemini-2.5-flash` | **Gemini VLM**（截圖直送多模態） | 每次輸入、**不儲存** |
+
+- 線上版由 `server.py` 代呼叫 Gemini（`POST /api/analyze`、看圖走 `POST /api/vlm`），
+  避免前端直連的 CORS 與金鑰外露；key 僅存前端記憶體與當次請求，不寫 localStorage、
+  不寫伺服器、不寫日誌。
+- Gemini 採 **OpenAI 相容端點**，但路徑是 `.../v1beta/openai/chat/completions`
+  （比 OpenAI 少一段 `/v1`），故 `llm_client.py` 有 Gemini 專用呼叫。
+- 線上版看不到 key 或研判失敗時，**優雅退回規則模式**並於綜合說明標示。
 
 ---
 
@@ -164,12 +180,12 @@ LLM 在 CPU/GPU 推論需數秒，為了「即時更新」採**兩段式**：
 |------|------|
 | `src/text_normalize.py` | 正規化、同義詞、拆字規避、中文 bigram 斷詞、話術標註定位 |
 | `src/rules_engine.py` | 離線規則引擎：pseudo-query → HyDE → RAG → 分級（**資料單一來源**） |
-| `src/llm_client.py` | 4B LLM 用戶端（Ollama／OpenAI 相容，純標準庫，失敗即降級、重試一次） |
-| `src/scam_guard_demo.py` | 主入口（orchestrator）：規則＋LLM 融合、背景預熱模型、CLI、`--test` |
-| `server.py` | 本機 HTTP 伺服器：`/api/analyze`（支援 `?llm=0`）、`/api/health` |
-| `app/` | 前端：截圖 OCR、原文標註、規則 vs LLM 對照、查證連結、複製/列印 |
-| `tests/test_scam_guard.py` | pytest 測試（37 項） |
-| `n8n/` | 可匯入 n8n 的自動化版本（JS 與 Python 引擎邏輯同步） |
+| `src/llm_client.py` | LLM 用戶端（Ollama／OpenAI 相容／Gemini，含 VLM 轉錄，純標準庫，失敗即降級、重試一次） |
+| `src/scam_guard_demo.py` | 主入口（orchestrator）：規則＋LLM 融合、離線/線上模式選擇、VLM 入口、背景預熱、CLI、`--test` |
+| `server.py` | 本機 HTTP 伺服器：`/api/analyze`（支援 `?llm=0`、`mode`、`geminiKey`）、`/api/vlm`、`/api/health` |
+| `app/` | 前端：離線/線上模式切換、截圖 OCR/VLM、原文標註、規則 vs LLM 對照、查證連結、複製/列印 |
+| `tests/test_scam_guard.py` | pytest 測試 |
+| `n8n/` | 可匯入 n8n：判斷層 workflow + 黑名單每日同步排程（與 Python 引擎邏輯同步） |
 
 ---
 
@@ -197,7 +213,10 @@ LLM 在 CPU/GPU 推論需數秒，為了「即時更新」採**兩段式**：
 
 - 以**免安裝版 Ollama**（位於 `C:\Users\USER\Downloads\ollama`）執行 `gemma3:4b`（Q4_K_M，約 3.3GB），Vulkan GPU 推論。
 - 伺服器啟動會**背景預熱模型**，第一個請求不必承受冷啟動（預熱後每次分析約 4–5 秒）。
-- LLM 僅用 Python 標準庫呼叫，無需額外套件；模型與端點以環境變數設定（`SCAM_LLM_*`）。
+- LLM 僅用 Python 標準庫呼叫，無需額外套件；離線版模型與端點以環境變數設定（`SCAM_LLM_*`）。
+- **線上版**改用雲端 Gemini `gemini-2.5-flash`（OpenAI 相容端點），文字研判與看截圖 VLM
+  共用同一把使用者每次輸入的金鑰；同樣只用標準庫呼叫，失敗即退回規則模式。
+  （註：`gemini-2.0-flash` 免費層額度已為 0，故預設改用仍有免費額度的 2.5 Flash。）
 
 ---
 

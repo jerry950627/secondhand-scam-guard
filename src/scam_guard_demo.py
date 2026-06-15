@@ -16,7 +16,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from link_check import check_text  # noqa: E402
-from llm_client import LlmConfig, LlmVerdict, is_available, run_llm  # noqa: E402
+from llm_client import (  # noqa: E402
+    LlmConfig,
+    LlmVerdict,
+    gemini_config,
+    is_available,
+    run_llm,
+    transcribe_image,
+)
 from rules_engine import (  # noqa: E402
     RISK_ORDER,
     TEST_CASES_PATH,
@@ -57,13 +64,25 @@ if _LLM_AVAILABLE:
     threading.Thread(target=_warm_up_llm, daemon=True).start()
 
 
+def _select_llm(mode: str, gemini_api_key: str) -> tuple[LlmConfig | None, bool]:
+    """依模式選 LLM 設定。回傳 (設定, 該模式是否有可用 LLM)。
+
+    online：用每次請求帶入的 Gemini key 動態建設定（key 為空則無 LLM）。
+    offline：沿用模組載入時偵測的本機設定與可用性。
+    """
+    if mode == "online":
+        key = (gemini_api_key or "").strip()
+        return (gemini_config(key), True) if key else (None, False)
+    return _LLM_CONFIG, _LLM_AVAILABLE
+
+
 def _fuse_levels(rules_level: str, llm: LlmVerdict | None) -> tuple[str, str]:
     """取較高風險。回傳 (最終等級, 一句話綜合說明)。"""
     if llm is None:
         return rules_level, f"離線規則模式：依規則與 RAG 依據研判為「{rules_level}風險」。"
     final = rules_level if RISK_ORDER[rules_level] >= RISK_ORDER[llm.level] else llm.level
     note = (
-        f"規則引擎研判「{rules_level}」、4B LLM（{llm.model}）研判「{llm.level}」"
+        f"規則引擎研判「{rules_level}」、LLM（{llm.model}）研判「{llm.level}」"
         f"（信心 {llm.confidence}）；保守起見綜合取較高風險「{final}」。"
     )
     if llm.evasion_detected:
@@ -77,16 +96,26 @@ def _fuse_score(rules_level: str, rules_score: int, final_level: str, llm: LlmVe
     return max(rules_score, LEVEL_FLOOR_SCORE[final_level])
 
 
-def analyze(text: str, use_llm: bool | None = None) -> dict:
+def analyze(
+    text: str,
+    use_llm: bool | None = None,
+    mode: str = "offline",
+    gemini_api_key: str = "",
+) -> dict:
     rules = analyze_rules(text)
     rules_level = rules["風險等級"]
     rules_score = rules["風險分數"]
 
-    should_use_llm = _LLM_AVAILABLE if use_llm is None else use_llm
-    llm = run_llm(text, rules["引用到的防詐依據"], _LLM_CONFIG) if should_use_llm else None
+    config, provider_available = _select_llm(mode, gemini_api_key)
+    should_use_llm = provider_available if use_llm is None else (use_llm and config is not None)
+    llm = run_llm(text, rules["引用到的防詐依據"], config) if should_use_llm else None
 
     final_level, note = _fuse_levels(rules_level, llm)
     final_score = _fuse_score(rules_level, rules_score, final_level, llm)
+
+    # 線上版叫了 Gemini 卻拿不到結果（金鑰無效/逾時/格式錯誤）→ 明確告知已退回規則。
+    if mode == "online" and should_use_llm and llm is None:
+        note = f"線上 Gemini 研判失敗或金鑰無效，已退回規則依據研判為「{final_level}風險」。"
 
     # 黑名單比對：抽出網址/電話查核，若風險更高則保守提升最終等級。
     link_result = check_text(text)
@@ -106,6 +135,7 @@ def analyze(text: str, use_llm: bool | None = None) -> dict:
         "風險分數": final_score,
         "綜合說明": note,
         "連結與電話查核": link_result,
+        "分析模式": mode,
         "llm_used": llm is not None,
         "規則研判": {"風險等級": rules_level, "風險分數": rules_score},
         "LLM研判": (
@@ -128,6 +158,11 @@ def analyze(text: str, use_llm: bool | None = None) -> dict:
         "建議行動": list(STATIC_ACTIONS),
         "可問賣家的查證問題": list(STATIC_QUESTIONS),
     }
+
+
+def vlm_transcribe(image_data_url: str, gemini_api_key: str) -> str | None:
+    """線上版 VLM 入口：把截圖交給 Gemini 逐字轉錄。失敗回 None。"""
+    return transcribe_image(image_data_url, gemini_api_key)
 
 
 def run_tests() -> list[dict]:

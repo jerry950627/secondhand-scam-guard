@@ -1148,3 +1148,159 @@ ol {
     min-height: 260px;
   }
 }
+
+/* ---- 離線/線上模式：header 切換鈕與啟動 modal ---- */
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mode-switch-button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px 14px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mode-switch-button:hover {
+  border-color: var(--teal);
+}
+
+.mode-switch-button:focus-visible {
+  outline: 2px solid var(--teal-text);
+  outline-offset: 2px;
+}
+
+.primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.mode-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(17, 26, 34, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.mode-modal[hidden] {
+  display: none;
+}
+
+.mode-modal-card {
+  width: min(560px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 26px;
+}
+
+.mode-modal-card h2 {
+  margin-bottom: 6px;
+}
+
+.mode-modal-sub {
+  color: var(--muted);
+  line-height: 1.55;
+  margin-bottom: 18px;
+}
+
+.mode-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mode-choice {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.mode-choice strong {
+  font-size: 16px;
+}
+
+.mode-choice span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mode-choice:hover {
+  border-color: var(--teal);
+}
+
+.mode-choice.active {
+  border-color: var(--teal);
+  border-left-color: var(--teal);
+  background: rgba(27, 138, 143, 0.08);
+  box-shadow: 0 0 0 3px rgba(27, 138, 143, 0.12);
+}
+
+.mode-choice:focus-visible {
+  outline: 2px solid var(--teal-text);
+  outline-offset: 2px;
+}
+
+.mode-key-row {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.mode-key-row label {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.mode-key-row input {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #ccd7df;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  outline: none;
+}
+
+.mode-key-row input:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 4px rgba(27, 138, 143, 0.12);
+}
+
+.mode-key-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mode-modal-actions {
+  margin-top: 22px;
+  display: flex;
+}
+
+@media (max-width: 640px) {
+  .mode-choices {
+    grid-template-columns: 1fr;
+  }
+}

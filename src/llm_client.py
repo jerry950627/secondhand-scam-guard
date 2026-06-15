@@ -5,11 +5,14 @@
 
 環境變數：
   SCAM_LLM_ENABLED   auto(預設) | 1/true 強制 | 0/false 關閉
-  SCAM_LLM_API       ollama(預設) | openai
+  SCAM_LLM_API       ollama(預設) | openai | gemini
   SCAM_LLM_BASE_URL  預設 http://localhost:11434
   SCAM_LLM_MODEL     預設 gemma3:4b
   SCAM_LLM_API_KEY   openai 相容端點用
   SCAM_LLM_TIMEOUT   秒，預設 30
+
+線上版（Gemini）以每次請求帶入的 API key 動態建立設定，不經環境變數，
+詳見 gemini_config()。Gemini 採 OpenAI 相容端點，但路徑少一段 /v1。
 """
 
 from __future__ import annotations
@@ -64,6 +67,32 @@ class LlmConfig:
             api_key=os.environ.get("SCAM_LLM_API_KEY", "").strip(),
             timeout=float(os.environ.get("SCAM_LLM_TIMEOUT", "60")),
         )
+
+
+# 線上版：Gemini OpenAI 相容端點（注意路徑是 .../openai/chat/completions，少一段 /v1）。
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+# 用 2.5 Flash：免費層仍有額度；gemini-2.0-flash 免費層已為 0（會回 429）。
+GEMINI_MODEL = "gemini-2.5-flash"
+
+# VLM 轉錄用 system 指令：把截圖逐字轉文字，並附一行視覺詐騙線索觀察。
+VLM_SYSTEM_PROMPT = (
+    "你是台灣二手交易的截圖判讀助理。請把圖片中的交易對話或貼文「逐字」轉成純文字，"
+    "保留原始用字（含注音、拆字、錯字，不要替使用者修正或美化），不要加入聊天框 UI、"
+    "時間戳、按讚留言分享等介面雜訊。若圖片中出現假金流頁、釣魚物流通知、仿冒平台登入頁、"
+    "偽造匯款證明等視覺線索，請在結尾用一行『（VLM 觀察：…）』簡述。只輸出轉錄文字與該行附註。"
+)
+
+
+def gemini_config(api_key: str, timeout: float = 60.0) -> "LlmConfig":
+    """以每次請求帶入的 key 動態建立 Gemini（線上版）設定；key 不落地。"""
+    return LlmConfig(
+        enabled_mode="1",
+        api="gemini",
+        base_url=GEMINI_BASE_URL,
+        model=GEMINI_MODEL,
+        api_key=api_key.strip(),
+        timeout=timeout,
+    )
 
 
 @dataclass(frozen=True)
@@ -161,7 +190,17 @@ def _call_ollama(config: LlmConfig, prompt: str) -> str:
     return result.get("message", {}).get("content", "")
 
 
-def _call_openai(config: LlmConfig, prompt: str) -> str:
+def _extract_choice_content(result: dict) -> str:
+    # 安全取值：端點回傳畸形（choices 為空/None、缺 message）時回空字串，
+    # 交由上層 _extract_json 判為 None 並退回規則模式，不讓主流程崩潰。
+    choices = result.get("choices") or []
+    if not choices:
+        return ""
+    return (choices[0] or {}).get("message", {}).get("content", "")
+
+
+def _post_chat_completions(config: LlmConfig, prompt: str, url: str) -> str:
+    """OpenAI 相容 /chat/completions 呼叫（openai 與 gemini 共用，只差 url）。"""
     headers = {"Content-Type": "application/json"}
     if config.api_key:
         headers["Authorization"] = f"Bearer {config.api_key}"
@@ -174,18 +213,16 @@ def _call_openai(config: LlmConfig, prompt: str) -> str:
             {"role": "user", "content": prompt},
         ],
     }
-    result = _http_json(
-        f"{config.base_url}/v1/chat/completions",
-        payload,
-        headers,
-        config.timeout,
-    )
-    # 安全取值：端點回傳畸形（choices 為空/None、缺 message）時回空字串，
-    # 交由上層 _extract_json 判為 None 並退回規則模式，不讓主流程崩潰。
-    choices = result.get("choices") or []
-    if not choices:
-        return ""
-    return (choices[0] or {}).get("message", {}).get("content", "")
+    return _extract_choice_content(_http_json(url, payload, headers, config.timeout))
+
+
+def _call_openai(config: LlmConfig, prompt: str) -> str:
+    return _post_chat_completions(config, prompt, f"{config.base_url}/v1/chat/completions")
+
+
+def _call_gemini(config: LlmConfig, prompt: str) -> str:
+    # Gemini 的 OpenAI 相容路徑少一段 /v1：.../v1beta/openai/chat/completions。
+    return _post_chat_completions(config, prompt, f"{config.base_url}/chat/completions")
 
 
 def is_available(config: LlmConfig | None = None) -> bool:
@@ -218,11 +255,12 @@ def run_llm(text: str, evidence: list[dict], config: LlmConfig | None = None) ->
     prompt = _build_user_prompt(text, evidence)
     for attempt in range(2):
         try:
-            content = (
-                _call_ollama(config, prompt)
-                if config.api == "ollama"
-                else _call_openai(config, prompt)
-            )
+            if config.api == "ollama":
+                content = _call_ollama(config, prompt)
+            elif config.api == "gemini":
+                content = _call_gemini(config, prompt)
+            else:
+                content = _call_openai(config, prompt)
         except (urllib.error.URLError, OSError, KeyError, IndexError, TypeError, ValueError, TimeoutError):
             continue
         parsed = _extract_json(content or "")
@@ -232,3 +270,36 @@ def run_llm(text: str, evidence: list[dict], config: LlmConfig | None = None) ->
         if verdict is not None:
             return verdict
     return None
+
+
+def transcribe_image(image_data_url: str, api_key: str, timeout: float = 60.0) -> str | None:
+    """線上版 VLM：把截圖丟 Gemini 多模態，回傳逐字轉錄文字（含視覺線索附註）。
+
+    任何失敗都回 None，由上層改用本機 OCR 或提示重試，不讓主流程崩潰。
+    """
+    key = (api_key or "").strip()
+    if not key or not image_data_url:
+        return None
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
+    payload = {
+        "model": GEMINI_MODEL,
+        "temperature": 0,
+        "messages": [
+            {"role": "system", "content": VLM_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "請逐字轉錄這張二手交易截圖中的對話/貼文。"},
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                ],
+            },
+        ],
+    }
+    try:
+        result = _http_json(
+            f"{GEMINI_BASE_URL}/chat/completions", payload, headers, timeout
+        )
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+        return None
+    content = _extract_choice_content(result).strip()
+    return content or None

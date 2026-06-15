@@ -12,8 +12,10 @@ APP_DIR = ROOT / "app"
 DEMO_PATH = ROOT / "src" / "scam_guard_demo.py"
 LOG_PATH = ROOT / "server.log"
 
-MAX_BODY_BYTES = 256 * 1024  # 請求大小上限，防呆
+MAX_BODY_BYTES = 256 * 1024  # 文字請求大小上限，防呆
+MAX_VLM_BYTES = 6 * 1024 * 1024  # /api/vlm 帶 base64 影像，放寬上限
 MAX_TEXT_CHARS = 8000  # 分析文字長度上限
+MAX_KEY_CHARS = 200  # Gemini API key 長度上限，防呆
 
 
 def write_log(message):
@@ -58,13 +60,15 @@ class ScamGuardHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         raw_path, _, query = self.path.partition("?")
         path = unquote(raw_path)
-        if path not in {"/api/analyze", "/api/check-link"}:
+        if path not in {"/api/analyze", "/api/check-link", "/api/vlm"}:
             self.send_error(404, "Not Found")
             return
         # ?llm=0 → 只跑規則引擎（即時回應，供前端漸進式渲染）。
         params = parse_qs(query)
         use_llm = params.get("llm", ["1"])[0].lower() not in {"0", "false", "no", "off"}
 
+        # /api/vlm 會帶 base64 影像，放寬上限；其餘維持文字小上限。
+        max_bytes = MAX_VLM_BYTES if path == "/api/vlm" else MAX_BODY_BYTES
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -74,8 +78,8 @@ class ScamGuardHandler(SimpleHTTPRequestHandler):
             # 負值會繞過下方上限檢查，且 rfile.read(負值) 會讀到 EOF 阻塞執行緒。
             self._send_json({"error": "Content-Length 無效。"}, status=400)
             return
-        if length > MAX_BODY_BYTES:
-            self._send_json({"error": "請求內容過大，請縮短文字。"}, status=413)
+        if length > max_bytes:
+            self._send_json({"error": "請求內容過大，請縮小圖片或縮短文字。"}, status=413)
             return
 
         try:
@@ -85,6 +89,12 @@ class ScamGuardHandler(SimpleHTTPRequestHandler):
                 self._send_json({"error": "請求內容需為 UTF-8 JSON。"}, status=400)
                 return
             payload = json.loads(body or "{}")
+
+            if path == "/api/vlm":
+                # 線上版 VLM：截圖交給 Gemini 逐字轉錄（不走文字驗證流程）。
+                self._handle_vlm(payload)
+                return
+
             text = str(payload.get("text", "")).strip()
             if not text:
                 self._send_json({"error": "請先貼上交易貼文、私訊內容，或 VLM/OCR 抽出的截圖文字。"}, status=400)
@@ -97,7 +107,15 @@ class ScamGuardHandler(SimpleHTTPRequestHandler):
                 # 輕量：只抽網址/電話查黑名單與啟發式，不跑規則/LLM。
                 self._send_json(demo.check_text(text))
                 return
-            result = demo.analyze(text, use_llm=use_llm)
+
+            # 離線/線上模式 + 每次請求帶入的 Gemini key（key 不落地、不記錄）。
+            mode = str(payload.get("mode", "offline")).strip().lower()
+            if mode not in {"offline", "online"}:
+                mode = "offline"
+            gemini_api_key = str(payload.get("geminiKey", "")).strip()
+            if len(gemini_api_key) > MAX_KEY_CHARS:
+                gemini_api_key = ""
+            result = demo.analyze(text, use_llm=use_llm, mode=mode, gemini_api_key=gemini_api_key)
             self._send_json(result)
         except json.JSONDecodeError:
             self._send_json({"error": "請求格式錯誤，需為 JSON。"}, status=400)
@@ -105,6 +123,21 @@ class ScamGuardHandler(SimpleHTTPRequestHandler):
             write_log("analyze error: " + traceback.format_exc())
             print("[server] analyze error:", exc)
             self._send_json({"error": "伺服器內部錯誤，請稍後再試。"}, status=500)
+
+    def _handle_vlm(self, payload):
+        image = str(payload.get("image", "")).strip()
+        if not image.startswith("data:image/"):
+            self._send_json({"error": "需提供 data:image/... 的截圖。"}, status=400)
+            return
+        gemini_api_key = str(payload.get("geminiKey", "")).strip()
+        if not gemini_api_key or len(gemini_api_key) > MAX_KEY_CHARS:
+            self._send_json({"error": "請先輸入有效的 Gemini API key。"}, status=400)
+            return
+        text = demo.vlm_transcribe(image, gemini_api_key)
+        if not text:
+            self._send_json({"error": "Gemini 看圖失敗，請確認金鑰或改用本機 OCR。"}, status=502)
+            return
+        self._send_json({"text": text})
 
     def _send_json(self, payload, status=200):
         data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
