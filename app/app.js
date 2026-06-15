@@ -38,6 +38,7 @@ const el = {
   comparePanel: document.querySelector("#comparePanel"),
   cmpRules: document.querySelector("#cmpRules"),
   cmpLlm: document.querySelector("#cmpLlm"),
+  cmpLlmLabel: document.querySelector("#cmpLlmLabel"),
   highlightSection: document.querySelector("#highlightSection"),
   highlightText: document.querySelector("#highlightText"),
   ocrButton: document.querySelector("#ocrButton"),
@@ -744,6 +745,7 @@ function renderSynthesis(result, llmPending) {
 
   const isOnline = result["分析模式"] === "online" || currentMode === "online";
   const pendLabel = isOnline ? "Gemini 研判中…" : "4B LLM 研判中…";
+  el.cmpLlmLabel.textContent = isOnline ? "雲端 Gemini" : "本機 4B LLM";
 
   if (result.llm_used && llm) {
     el.modeBadge.textContent = isOnline
