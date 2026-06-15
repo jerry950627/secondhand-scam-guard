@@ -1,6 +1,7 @@
 # 執行期產物
 .server.pid
 server.log
+content/kb_embeddings.json
 
 # Python 測試 / 快取
 .pytest_cache/

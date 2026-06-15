@@ -8,7 +8,11 @@
 }
 ```
 
-目前匯入版 workflow（v2）的 Code node 已與本機 Python 引擎邏輯同步：含 NFKC 正規化、同義詞、拆字規避 compact 比對、中文 bigram RAG、10 類知識庫、HyDE 僅展示不計分、低風險只引用安全守則，以及原文話術標註（`highlights`）。確保沒有 API key 也能示範完整 pseudo-query、HyDE 與 RAG 風險分析。
+目前匯入版 workflow（v2）的 Code node 與本機 Python 引擎邏輯同步：含 NFKC 正規化、同義詞、拆字規避 compact 比對、中文 bigram RAG、知識庫、HyDE 僅展示不計分、低風險只引用安全守則，以及原文話術標註（`highlights`）。確保沒有 API key 也能示範完整 pseudo-query、HyDE 與 RAG 風險分析。
+
+> 註：Code node 內嵌的知識庫**已同步至 16 類**（含 6 類 data.gov.tw 政府開放資料），
+> 由 `python n8n/_generate_workflow.py` 從本機 Python 引擎（單一資料來源）產生；
+> 知識庫或詞表更新後重跑該腳本即可保持一致。
 
 > 內嵌的 JS 已用 QuickJS（ES2020）實跑，與 Python 引擎在低/中/高、拆字規避、同義詞、解除分期、假投資、正常 COD 等案例上輸出完全一致。pinData 預設帶一筆拆字規避測試輸入，匯入後可直接執行查看結果。
 

@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from functools import lru_cache
 from pathlib import Path
 
+import embeddings
 from text_normalize import (
     PreparedText,
     highlight_spans,
@@ -21,6 +23,7 @@ from text_normalize import (
 ROOT = Path(__file__).resolve().parents[1]
 KB_PATH = ROOT / "content" / "anti_fraud_knowledge_base.json"
 TEST_CASES_PATH = ROOT / "content" / "test_cases.json"
+KB_EMBED_CACHE_PATH = ROOT / "content" / "kb_embeddings.json"
 
 # --- 語境與話術詞表 -------------------------------------------------
 # 出現這些片語代表使用者本身採取了安全做法，需抑制相關誤判。
@@ -69,6 +72,17 @@ PER_TERM_POINTS = 5  # 每個高/中風險詞的加分
 PER_EVIDENCE_POINTS = 3  # 每個知識庫命中訊號的加分
 MAX_EVIDENCE = 3
 
+# --- 語意檢索（可選，bge-m3）常數 ---------------------------------
+# 檢索（召回）用 HyDE 假想文件嵌入；軟提醒（判別）用原文嵌入。
+SEMANTIC_WEIGHT = 10  # HyDE 語意相似度併入檢索排序的權重
+SEM_RELEVANT = 0.55  # HyDE 檢索：純語意也納入引用依據的門檻（召回導向，偏寬）
+# 軟提醒門檻：原文對「詐騙樣態 KB」的最高 cosine。
+# 實測 bge-m3：新話術詐騙與正常交易在 0.65–0.68 重疊，無法據此可靠「升級風險等級」
+# （正常購物會被誤升）。故僅作「不改變風險等級」的軟提醒＋保留相關引用，
+# 真正的新話術等級判別交由 LLM 層。
+SEM_ADVISORY = 0.66
+SEMANTIC_SIGNAL = "語意上與已知詐騙樣態相似，建議提高警覺"
+
 RISK_ORDER = {"低": 0, "中": 1, "高": 2}
 
 
@@ -82,6 +96,83 @@ def load_knowledge_base() -> tuple[dict, ...]:
 def load_test_cases() -> list[dict]:
     with TEST_CASES_PATH.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+# --- 語意檢索：KB 向量快取 + 相似度 --------------------------------
+def _kb_texts() -> list[str]:
+    return [
+        f'{item["title"]} {item["guidance"]} {" ".join(item["risk_signals"])}'
+        for item in load_knowledge_base()
+    ]
+
+
+def _kb_digest(texts: list[str]) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(embeddings.EMBED_MODEL.encode("utf-8"))
+    for text in texts:
+        hasher.update(text.encode("utf-8"))
+        hasher.update(b"\x00")
+    return hasher.hexdigest()
+
+
+@lru_cache(maxsize=1)
+def kb_vectors() -> tuple[tuple[float, ...], ...] | None:
+    """回傳與 KB 對齊的嵌入向量；優先讀快取，無效則在 embedder 可用時重算。
+
+    embedder 不可用（未拉 bge-m3 / 連不到）時回 None，由上層退回純詞彙檢索。
+    """
+    texts = _kb_texts()
+    digest = _kb_digest(texts)
+    try:
+        with KB_EMBED_CACHE_PATH.open("r", encoding="utf-8") as handle:
+            cached = json.load(handle)
+        if cached.get("hash") == digest and len(cached.get("vectors", [])) == len(texts):
+            return tuple(tuple(vec) for vec in cached["vectors"])
+    except (OSError, ValueError):
+        pass
+
+    if not embeddings.is_available():
+        return None
+    vectors = embeddings.embed(texts)
+    if not vectors or len(vectors) != len(texts):
+        return None
+    try:
+        with KB_EMBED_CACHE_PATH.open("w", encoding="utf-8") as handle:
+            json.dump({"model": embeddings.EMBED_MODEL, "hash": digest, "vectors": vectors}, handle)
+    except OSError:
+        pass  # 寫快取失敗（唯讀資料夾）不影響運作
+    return tuple(tuple(vec) for vec in vectors)
+
+
+def semantic_sims(text: str) -> list[float] | None:
+    """檢索（召回）：以 HyDE 假想文件作為查詢向量，算對每筆 KB 的餘弦相似度。
+
+    HyDE 文件在此「真的參與檢索」。embedder 或向量不可用時回 None。
+    """
+    vectors = kb_vectors()
+    if not vectors:
+        return None
+    query = embeddings.embed_one(hyde_document(text))
+    if not query:
+        return None
+    return [embeddings.cosine(query, vec) for vec in vectors]
+
+
+def semantic_escalation_sim(text: str) -> float | None:
+    """升級（判別）：以「原文」嵌入對詐騙樣態 KB（除安全守則）的最高 cosine。
+
+    用原文而非 HyDE，避免 HyDE 模板把所有文字都拉向詐騙、無法判別。
+    embedder 或向量不可用時回 None（→ 不升級、退回純詞彙）。
+    """
+    vectors = kb_vectors()
+    if not vectors:
+        return None
+    query = embeddings.embed_one(text)
+    if not query:
+        return None
+    kb = load_knowledge_base()
+    sims = [embeddings.cosine(query, vectors[i]) for i, item in enumerate(kb) if item["id"] != SAFE_GUIDANCE_ID]
+    return max(sims, default=0.0)
 
 
 def is_safe_payment_context(prepared: PreparedText) -> bool:
@@ -114,23 +205,31 @@ def _kb_signal_hits(item: dict, prepared: PreparedText, safe: bool) -> list[str]
     return hits
 
 
-def retrieve_evidence(prepared: PreparedText, queries: list[str]) -> list[dict]:
+def retrieve_evidence(
+    prepared: PreparedText, queries: list[str], sims: list[float] | None = None
+) -> list[dict]:
+    """混合檢索：詞彙重疊（bigram + risk_signal 加權）＋ 可選的語意相似度。
+
+    sims 為 HyDE 查詢對每筆 KB 的餘弦相似度（與 KB 對齊）；None 時退回純詞彙。
+    """
     safe = is_safe_payment_context(prepared)
-    # 用使用者原文 + pseudo-query 標籤算詞重疊；HyDE 是通用模板，
-    # 納入評分會讓每筆詐騙 KB 都被同等拉高，因此只當推理軌跡展示、不計分。
     tokens = tokenize(prepared.normalized + " " + " ".join(queries))
     scored = []
-    for item in load_knowledge_base():
+    for index, item in enumerate(load_knowledge_base()):
         haystack = " ".join(
             [item["title"], item["guidance"], " ".join(item["risk_signals"])]
         )
         signal_hits = _kb_signal_hits(item, prepared, safe)
         token_hits = len(tokens & tokenize(haystack))
-        relevant = bool(signal_hits) or token_hits >= MIN_DISPLAY_TOKEN_HITS
+        sim = sims[index] if sims else 0.0
+        # 語意夠相似時，即使零詞彙重疊也納入引用（讓新話術也找得到相關樣態）。
+        relevant = bool(signal_hits) or token_hits >= MIN_DISPLAY_TOKEN_HITS or sim >= SEM_RELEVANT
         if not relevant:
             continue
-        score = token_hits + len(signal_hits) * SIGNAL_WEIGHT
-        scored.append({**item, "score": score, "matched_signals": signal_hits})
+        score = token_hits + len(signal_hits) * SIGNAL_WEIGHT + SEMANTIC_WEIGHT * sim
+        scored.append(
+            {**item, "score": score, "matched_signals": signal_hits, "semantic_sim": round(sim, 3)}
+        )
     scored.sort(key=lambda entry: entry["score"], reverse=True)
     return scored[:MAX_EVIDENCE]
 
@@ -173,15 +272,29 @@ def analyze_rules(text: str) -> dict:
     """純規則分析，輸出穩定鍵值供 orchestrator 與測試使用。"""
     prepared = prepare(text)
     queries = pseudo_queries(prepared)
-    evidence = retrieve_evidence(prepared, queries)
+    sims = semantic_sims(text)  # embedder 不可用時為 None → 純詞彙
+    evidence = retrieve_evidence(prepared, queries, sims)
     level, score, high_hits, medium_hits = classify_risk(prepared, evidence)
-    # 低風險（無任何詐騙訊號）時，只引用「正常交易守則」，
-    # 避免把純 token 重疊的詐騙樣態誤列為依據而誤導使用者。
-    if level == "低" and not any(item["matched_signals"] for item in evidence):
+
+    # 語意軟提醒（補新話術在規則層的能見度，但「不改變風險等級」）：
+    # 低風險且非安全語境時，若「原文」語意接近已知詐騙樣態，加一條提醒並保留相關引用。
+    # 註：實測 bge-m3 上正常交易與新話術詐騙相似度重疊，無法據此可靠升級等級，
+    # 故只做軟提醒；等級判別交由 LLM 層。
+    semantic_flag = False
+    if level == "低" and not is_safe_payment_context(prepared):
+        sim = semantic_escalation_sim(text)
+        if sim is not None and sim >= SEM_ADVISORY:
+            semantic_flag = True
+
+    # 低風險且無任何詐騙訊號：無語意提醒時只引用「正常交易守則」避免誤導；
+    # 有語意提醒時則保留語意檢索到的相關樣態當引用，讓使用者看到警示依據。
+    if level == "低" and not semantic_flag and not any(item["matched_signals"] for item in evidence):
         guidance = _safe_guidance_citation()
         evidence = [guidance] if guidance else []
 
     signals = (high_hits + medium_hits) if level == "高" else medium_hits if level == "中" else []
+    if semantic_flag and SEMANTIC_SIGNAL not in signals:
+        signals.append(SEMANTIC_SIGNAL)
     evidence_signals = [sig for item in evidence for sig in item["matched_signals"]]
     highlights = highlight_spans(
         {"high": high_hits + evidence_signals, "medium": medium_hits}, text
@@ -199,6 +312,7 @@ def analyze_rules(text: str) -> dict:
                 "title": item["title"],
                 "matched_signals": item["matched_signals"],
                 "source_url": item["source_url"],
+                "語意相似": item.get("semantic_sim"),
             }
             for item in evidence
         ],

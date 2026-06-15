@@ -14,6 +14,7 @@ LOG_PATH = ROOT / "server.log"
 
 MAX_BODY_BYTES = 256 * 1024  # 文字請求大小上限，防呆
 MAX_VLM_BYTES = 6 * 1024 * 1024  # /api/vlm 帶 base64 影像，放寬上限
+MAX_VLM_IMAGES = 8  # /api/vlm 單次最多張數
 MAX_TEXT_CHARS = 8000  # 分析文字長度上限
 MAX_KEY_CHARS = 200  # Gemini API key 長度上限，防呆
 
@@ -54,6 +55,10 @@ class ScamGuardHandler(SimpleHTTPRequestHandler):
             self.path = "/index.html"
         if self.path.split("?", 1)[0] == "/api/health":
             self._send_json({"status": "ok", "llm_available": demo._LLM_AVAILABLE})
+            return
+        if self.path.split("?", 1)[0] == "/api/knowledge-base":
+            # 供前端「詐騙樣態圖鑑」瀏覽 16 類知識庫。
+            self._send_json(demo.knowledge_base())
             return
         return super().do_GET()
 
@@ -125,15 +130,23 @@ class ScamGuardHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": "伺服器內部錯誤，請稍後再試。"}, status=500)
 
     def _handle_vlm(self, payload):
-        image = str(payload.get("image", "")).strip()
-        if not image.startswith("data:image/"):
-            self._send_json({"error": "需提供 data:image/... 的截圖。"}, status=400)
+        # 接受多張（images 陣列）或單張（image 字串，保留相容）。
+        raw = payload.get("images")
+        if isinstance(raw, list):
+            urls = [str(x).strip() for x in raw]
+        else:
+            urls = [str(payload.get("image", "")).strip()]
+        urls = [u for u in urls if u]
+        if not urls or len(urls) > MAX_VLM_IMAGES or not all(u.startswith("data:image/") for u in urls):
+            self._send_json(
+                {"error": f"需提供 1～{MAX_VLM_IMAGES} 張 data:image/... 的截圖。"}, status=400
+            )
             return
         gemini_api_key = str(payload.get("geminiKey", "")).strip()
         if not gemini_api_key or len(gemini_api_key) > MAX_KEY_CHARS:
             self._send_json({"error": "請先輸入有效的 Gemini API key。"}, status=400)
             return
-        text = demo.vlm_transcribe(image, gemini_api_key)
+        text = demo.vlm_transcribe(urls, gemini_api_key)
         if not text:
             self._send_json({"error": "Gemini 看圖失敗，請確認金鑰或改用本機 OCR。"}, status=502)
             return

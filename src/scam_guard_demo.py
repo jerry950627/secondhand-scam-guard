@@ -15,24 +15,31 @@ from pathlib import Path
 # 讓本檔被 CLI 或 server.py 以獨立模組載入時，都能 import 同層模組。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from attack_chain import analyze_attack_chain  # noqa: E402
 from link_check import check_text  # noqa: E402
+from safe_reply import build_safe_replies  # noqa: E402
+from text_normalize import prepare  # noqa: E402
 from llm_client import (  # noqa: E402
     LlmConfig,
     LlmVerdict,
     gemini_config,
     is_available,
     run_llm,
-    transcribe_image,
+    transcribe_images,
 )
 from rules_engine import (  # noqa: E402
     RISK_ORDER,
     TEST_CASES_PATH,
     analyze_rules,
+    is_safe_payment_context,
+    load_knowledge_base,
     load_test_cases,
 )
 
-# LLM 抬升風險時，分數至少要到該等級的下限。
+# LLM 抬升風險時，分數落在該等級區間 [下限, 上限] 內，依信心線性取值。
 LEVEL_FLOOR_SCORE = {"低": 20, "中": 55, "高": 80}
+LEVEL_CAP_SCORE = {"低": 44, "中": 74, "高": 95}
+CONF_ESCALATE = 60  # LLM 要把風險「升級」所需的最低信心；低於此維持規則研判（降低誤判）。
 
 STATIC_ACTIONS = [
     "不要離開原交易平台進行付款或驗證。",
@@ -77,14 +84,28 @@ def _select_llm(mode: str, gemini_api_key: str) -> tuple[LlmConfig | None, bool]
 
 
 def _fuse_levels(rules_level: str, llm: LlmVerdict | None) -> tuple[str, str]:
-    """取較高風險。回傳 (最終等級, 一句話綜合說明)。"""
+    """信心加權融合：LLM 只在信心足夠時才升級，且永不降級。回 (最終等級, 說明)。"""
     if llm is None:
         return rules_level, f"離線規則模式：依規則與 RAG 依據研判為「{rules_level}風險」。"
-    final = rules_level if RISK_ORDER[rules_level] >= RISK_ORDER[llm.level] else llm.level
-    note = (
-        f"規則引擎研判「{rules_level}」、LLM（{llm.model}）研判「{llm.level}」"
-        f"（信心 {llm.confidence}）；保守起見綜合取較高風險「{final}」。"
-    )
+    llm_higher = RISK_ORDER[llm.level] > RISK_ORDER[rules_level]
+    if llm_higher and llm.confidence >= CONF_ESCALATE:
+        final = llm.level
+        note = (
+            f"規則研判「{rules_level}」、LLM（{llm.model}）研判「{llm.level}」"
+            f"（信心 {llm.confidence} ≥ {CONF_ESCALATE}）；升級為「{final}」。"
+        )
+    elif llm_higher:
+        final = rules_level
+        note = (
+            f"規則研判「{rules_level}」、LLM（{llm.model}）認為更高「{llm.level}」"
+            f"但信心不足（{llm.confidence} < {CONF_ESCALATE}），維持規則研判「{final}」。"
+        )
+    else:
+        final = rules_level  # 永不降級（防詐保守）
+        note = (
+            f"規則研判「{rules_level}」、LLM（{llm.model}）研判「{llm.level}」"
+            f"（信心 {llm.confidence}）；維持較保守的「{final}」。"
+        )
     if llm.evasion_detected:
         note += " LLM 偵測到疑似注音/拆字規避手法。"
     return final, note
@@ -93,7 +114,12 @@ def _fuse_levels(rules_level: str, llm: LlmVerdict | None) -> tuple[str, str]:
 def _fuse_score(rules_level: str, rules_score: int, final_level: str, llm: LlmVerdict | None) -> int:
     if final_level == rules_level:
         return rules_score
-    return max(rules_score, LEVEL_FLOOR_SCORE[final_level])
+    # 升級時分數在該等級區間內隨 LLM 信心線性取值（信心加權的啟發式風險指標，非機率）。
+    floor = LEVEL_FLOOR_SCORE[final_level]
+    cap = LEVEL_CAP_SCORE.get(final_level, floor)
+    confidence = max(0, min(100, llm.confidence)) if llm else 0
+    scaled = floor + int((cap - floor) * confidence / 100)
+    return max(rules_score, scaled)
 
 
 def analyze(
@@ -129,12 +155,20 @@ def analyze(
     if llm and llm.evasion_detected and "疑似規避偵測手法" not in signals:
         signals.append("疑似規避偵測手法")
 
+    # 防詐副駕：攻擊鏈階段＋下一步預測、可直接貼回去的安全回覆腳本（離線、決定性）。
+    prepared = prepare(text)
+    safe_context = is_safe_payment_context(prepared)
+    attack_chain = analyze_attack_chain(prepared, safe=safe_context)
+    safe_replies = build_safe_replies(final_level, prepared)
+
     return {
         "輸入文字": text,
         "風險等級": final_level,
         "風險分數": final_score,
         "綜合說明": note,
         "連結與電話查核": link_result,
+        "攻擊鏈": attack_chain,
+        "安全回覆建議": safe_replies,
         "分析模式": mode,
         "llm_used": llm is not None,
         "規則研判": {"風險等級": rules_level, "風險分數": rules_score},
@@ -160,9 +194,18 @@ def analyze(
     }
 
 
-def vlm_transcribe(image_data_url: str, gemini_api_key: str) -> str | None:
-    """線上版 VLM 入口：把截圖交給 Gemini 逐字轉錄。失敗回 None。"""
-    return transcribe_image(image_data_url, gemini_api_key)
+def knowledge_base() -> list[dict]:
+    """回傳防詐知識庫全部樣態（供前端「詐騙樣態圖鑑」瀏覽）。"""
+    return list(load_knowledge_base())
+
+
+def vlm_transcribe(images, gemini_api_key: str) -> str | None:
+    """線上版 VLM 入口：把一或多張截圖交給 Gemini 逐字轉錄。失敗回 None。
+
+    images 可為單一 data URL 字串或 data URL 字串列表。
+    """
+    urls = [images] if isinstance(images, str) else list(images or [])
+    return transcribe_images(urls, gemini_api_key)
 
 
 def run_tests() -> list[dict]:

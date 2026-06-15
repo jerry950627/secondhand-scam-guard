@@ -51,12 +51,13 @@
             <span class="section-label">專案功能</span>
             <h2>把 FB／Threads 二手交易訊息，整理成可查證的防詐報告</h2>
             <p>貼上交易貼文、私訊或截圖 OCR 文字後，系統會標出可疑話術、判斷風險等級、列出查證問題，並保留 RAG 引用與推理軌跡供課堂 demo 說明。</p>
+            <button class="secondary-button kb-guide-button" id="kbGuideButton" type="button">📖 詐騙樣態圖鑑（16 類）</button>
           </div>
           <div class="feature-grid" aria-label="專案功能清單">
             <article class="feature-item">
               <span>01</span>
-              <strong>截圖 OCR 與文字清理</strong>
-              <p>可放入交易截圖，將辨識後的對話整理成較乾淨的分析文字。</p>
+              <strong>截圖 OCR／VLM 與文字清理</strong>
+              <p>可放入多張對話截圖，離線用 OCR、線上用 Gemini VLM，依序辨識合併成乾淨的分析文字。</p>
             </article>
             <article class="feature-item">
               <span>02</span>
@@ -76,6 +77,11 @@
           </div>
         </section>
 
+        <section class="disclaimer" role="note">
+          <span class="disclaimer-icon" aria-hidden="true">⚠️</span>
+          <p><strong>免責聲明：</strong>本工具僅提供風險提醒與查證建議，採「規則 + AI 輔助」研判，<strong>可能誤判或漏判、不保證 100% 準確</strong>，也不構成法律或金融建議。請務必自行查證，必要時撥打 165 反詐騙專線確認。</p>
+        </section>
+
         <section class="work-grid">
           <section class="input-panel">
             <div class="panel-heading">
@@ -88,23 +94,24 @@
             <div class="capture-panel" id="capturePanel">
               <div class="capture-toolbar">
                 <div>
-                  <h3>截圖暫存區</h3>
-                  <p>可預覽截圖；分析仍以文字欄為準。</p>
+                  <h3>詐騙對話截圖區</h3>
+                  <p>可放多張對話截圖（依序辨識合併）；分析仍以文字欄為準。</p>
                 </div>
                 <label class="secondary-button file-picker" for="imageInput">選擇圖片</label>
-                <input id="imageInput" type="file" accept="image/*" hidden />
+                <input id="imageInput" type="file" accept="image/*" multiple hidden />
               </div>
-              <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="貼上或拖曳交易截圖">
+              <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="貼上或拖曳交易截圖（可多張）">
                 <div class="drop-empty" id="dropEmpty">
-                  <strong>貼上或拖曳截圖</strong>
-                  <span>按「辨識文字」可 OCR 轉文字，首次使用需連網下載語言包。</span>
+                  <strong>貼上或拖曳截圖（可多張）</strong>
+                  <span id="dropHint">按「辨識文字」可 OCR 轉文字，首次使用需連網下載語言包。</span>
                 </div>
-                <img id="imagePreview" alt="交易截圖預覽" hidden />
+                <div class="image-thumbs" id="imageThumbs" hidden></div>
               </div>
               <div class="capture-actions">
                 <button class="secondary-button compact-button" id="ocrButton" type="button" disabled>辨識文字 OCR</button>
+                <button class="secondary-button compact-button" id="qrButton" type="button" disabled>解析 QR 收款碼</button>
                 <button class="secondary-button compact-button" id="cleanTextButton" type="button">清理文字</button>
-                <button class="secondary-button compact-button" id="clearImageButton" type="button" disabled>清除圖片</button>
+                <button class="secondary-button compact-button" id="clearImageButton" type="button" disabled>清除全部</button>
                 <span class="image-status" id="imageStatus">尚未載入圖片</span>
               </div>
             </div>
@@ -177,6 +184,12 @@
               </div>
             </div>
 
+            <div class="result-section" id="attackChainSection" hidden>
+              <h3>詐騙攻擊鏈（對方走到哪一步？）</h3>
+              <div class="attack-chain" id="attackChain"></div>
+              <p class="attack-next" id="attackNext"></p>
+            </div>
+
             <div class="result-section" id="highlightSection" hidden>
               <h3>命中話術（原文標註）</h3>
               <div class="highlight-text" id="highlightText"></div>
@@ -201,6 +214,11 @@
                 <h3>查證問題</h3>
                 <ul id="questions"></ul>
               </div>
+            </div>
+
+            <div class="result-section" id="safeReplySection" hidden>
+              <h3>安全回覆腳本（可直接貼回去反測對方）</h3>
+              <div class="safe-replies" id="safeReplies"></div>
             </div>
 
             <div class="result-section next-step-card" id="nextStepCard" hidden>
@@ -232,6 +250,28 @@
                 </a>
               </div>
             </div>
+
+            <div class="result-section">
+              <h3>檢舉與報案管道（遇到了怎麼辦？）</h3>
+              <div class="verify-links">
+                <a class="verify-link" href="tel:165">
+                  <strong>☎ 撥打 165 報案</strong>
+                  <span>已受騙或想報案，反詐騙專線真人協助</span>
+                </a>
+                <a class="verify-link" href="https://165.npa.gov.tw/" target="_blank" rel="noreferrer">
+                  <strong>165 全民防騙網・線上檢舉 ↗</strong>
+                  <span>線上報案、檢舉可疑帳號與網址</span>
+                </a>
+                <a class="verify-link" href="https://help.shopee.tw/" target="_blank" rel="noreferrer">
+                  <strong>蝦皮客服中心・檢舉賣家 ↗</strong>
+                  <span>站內檢舉可疑賣家、交易糾紛申訴</span>
+                </a>
+                <a class="verify-link" href="https://www.facebook.com/help/" target="_blank" rel="noreferrer">
+                  <strong>Facebook／Threads 檢舉 ↗</strong>
+                  <span>檢舉詐騙貼文、Marketplace 可疑賣家</span>
+                </a>
+              </div>
+            </div>
           </section>
         </section>
 
@@ -252,7 +292,28 @@
           </div>
         </section>
       </section>
+      <footer class="app-footer">
+        <p>⚠️ 風險研判僅供參考、不保證準確，不構成法律或金融建議；請自行查證、必要時撥打 165。</p>
+        <p class="app-footer-links">
+          <button class="link-button" id="kbGuideFooter" type="button">詐騙樣態圖鑑</button>
+          <a href="https://165.npa.gov.tw/" target="_blank" rel="noreferrer">165 全民防騙網</a>
+          <a href="tel:165">撥打 165</a>
+        </p>
+      </footer>
     </main>
+
+    <div class="mode-modal kb-modal" id="kbModal" role="dialog" aria-modal="true" aria-labelledby="kbModalTitle" hidden>
+      <div class="mode-modal-card kb-modal-card">
+        <div class="kb-modal-head">
+          <div>
+            <h2 id="kbModalTitle">詐騙樣態圖鑑</h2>
+            <p class="mode-modal-sub">16 類二手交易常見詐騙樣態，來源為 165／警政署與 data.gov.tw 政府開放資料。</p>
+          </div>
+          <button class="kb-modal-close" id="kbModalClose" type="button" aria-label="關閉圖鑑">×</button>
+        </div>
+        <div class="kb-grid" id="kbGrid"></div>
+      </div>
+    </div>
 
     <script src="./app.js"></script>
   </body>

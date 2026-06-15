@@ -55,6 +55,9 @@ OFFICIAL_DOMAINS = (
     "pcstore.com.tw", "ruten.com.tw", "books.com.tw", "7-11.com.tw", "family.com.tw",
     "ibon.com.tw", "t-cat.com.tw", "ecpay.com.tw", "newebpay.com", "post.gov.tw",
     "165.npa.gov.tw", "npa.gov.tw", "gov.tw", "line.me", "google.com", "facebook.com",
+    # 其他正當台灣電商／開店平台（避免合法賣場被誤標）。
+    "rakuten.com.tw", "buy123.com.tw", "gomaji.com", "etmall.com.tw", "coupang.com",
+    "shoplineapp.com", "cyberbiz.co", "meepshop.com", "payeasy.com.tw",
 )
 # 品牌關鍵字（latin）：出現在網域但非官方 → 冒用。
 BRAND_KEYWORDS = ("shopee", "momo", "pchome", "ruten", "ecpay", "newebpay", "7-11", "family", "ibon")
@@ -64,10 +67,10 @@ SHORTENERS = (
     "pse.is", "tinyurl.com", "ppt.cc", "0rz.tw", "goo.gl", "t.co", "is.gd", "cutt.ly",
     "myppt.cc", "risu.io", "reurl.com",
 )
-# 詐騙常見可疑 TLD。
+# 詐騙常見可疑 TLD。註：.shop 是合法電商常用，移除以免誤判正常賣場。
 SUSPICIOUS_TLDS = (
     "xyz", "top", "icu", "vip", "tk", "ml", "ga", "cf", "gq", "buzz", "click",
-    "rest", "work", "fit", "cyou", "sbs", "shop",
+    "rest", "work", "fit", "cyou", "sbs",
 )
 
 URL_RE = re.compile(r"(?:https?://|www\.)[^\s，。、！？；：)）\]】<>\"'　]+", re.IGNORECASE)

@@ -484,11 +484,72 @@ a:focus-visible {
   line-height: 1.45;
 }
 
-#imagePreview {
+.image-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 10px;
   width: 100%;
-  max-height: 320px;
-  object-fit: contain;
+  padding: 12px;
+}
+
+.image-thumb {
+  position: relative;
+  width: 92px;
+  height: 92px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
   background: #eef3f2;
+}
+
+.image-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.image-thumb-index {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(17, 26, 34, 0.72);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.image-thumb-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(159, 47, 37, 0.92);
+  color: #fff;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.image-thumb-remove:hover {
+  background: var(--coral-dark);
+}
+
+.image-thumb-remove:focus-visible {
+  outline: 2px solid var(--teal-text);
+  outline-offset: 2px;
 }
 
 .timestamp {
@@ -1302,5 +1363,306 @@ ol {
 @media (max-width: 640px) {
   .mode-choices {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ---- 免責聲明 / footer / 詐騙樣態圖鑑 ---- */
+
+.disclaimer {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 18px;
+  border: 1px solid rgba(246, 200, 95, 0.6);
+  border-left: 6px solid var(--amber);
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(246, 200, 95, 0.18), rgba(255, 254, 250, 0.9));
+  color: var(--warning-ink);
+}
+
+.disclaimer-icon {
+  font-size: 20px;
+  line-height: 1.4;
+}
+
+.disclaimer p {
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.kb-guide-button {
+  margin-top: 14px;
+}
+
+.app-footer {
+  margin-top: 22px;
+  padding: 18px 4px 6px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.app-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 8px;
+}
+
+.link-button {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  color: var(--teal-text);
+}
+
+.app-footer-links a {
+  color: var(--teal-text);
+  font-weight: 700;
+}
+
+.link-button:hover,
+.app-footer-links a:hover {
+  text-decoration: underline;
+}
+
+.kb-modal-card {
+  width: min(900px, 100%);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  padding: 22px 24px;
+}
+
+.kb-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.kb-modal-close {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kb-modal-close:hover {
+  border-color: var(--teal);
+}
+
+.kb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.kb-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--teal);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.kb-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.kb-card-head h3 {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.kb-badge {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(61, 90, 128, 0.12);
+  color: var(--indigo);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.kb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.kb-chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(240, 100, 73, 0.1);
+  color: var(--coral-dark);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kb-guidance {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.kb-source {
+  color: var(--teal-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.kb-source:hover {
+  text-decoration: underline;
+}
+
+.kb-loading {
+  grid-column: 1 / -1;
+  padding: 20px;
+  text-align: center;
+  color: var(--muted);
+}
+
+@media (max-width: 640px) {
+  .kb-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- 詐騙攻擊鏈時間軸 + 安全回覆腳本 ---- */
+
+.attack-chain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chain-stage {
+  flex: 1 1 130px;
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  text-align: center;
+  padding: 12px 8px;
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.chain-dot {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.chain-name {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.chain-hits {
+  font-size: 12px;
+  color: var(--coral-dark);
+  line-height: 1.4;
+}
+
+.chain-stage.passed {
+  border-top-color: var(--amber);
+}
+
+.chain-stage.passed .chain-dot {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--warning-ink);
+}
+
+.chain-stage.current {
+  border-color: var(--coral);
+  border-top-color: var(--coral);
+  box-shadow: 0 0 0 3px rgba(240, 100, 73, 0.14);
+}
+
+.chain-stage.current .chain-dot {
+  background: var(--coral);
+  border-color: var(--coral);
+  color: #fff;
+}
+
+.attack-next {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-left: 4px solid var(--indigo);
+  border-radius: 6px;
+  background: rgba(61, 90, 128, 0.08);
+  color: var(--ink);
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.safe-replies {
+  display: grid;
+  gap: 10px;
+}
+
+.safe-reply {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--teal);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.safe-reply-text {
+  flex: 1;
+  line-height: 1.55;
+}
+
+.safe-reply-copy {
+  flex: none;
+}
+
+@media (max-width: 640px) {
+  .chain-stage {
+    flex-basis: 100%;
+  }
+
+  .safe-reply {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

@@ -24,8 +24,9 @@ const el = {
   capturePanel: document.querySelector("#capturePanel"),
   dropZone: document.querySelector("#dropZone"),
   dropEmpty: document.querySelector("#dropEmpty"),
+  dropHint: document.querySelector("#dropHint"),
   imageInput: document.querySelector("#imageInput"),
-  imagePreview: document.querySelector("#imagePreview"),
+  imageThumbs: document.querySelector("#imageThumbs"),
   imageStatus: document.querySelector("#imageStatus"),
   clearImageButton: document.querySelector("#clearImageButton"),
   errorBanner: document.querySelector("#errorBanner"),
@@ -47,6 +48,11 @@ const el = {
   downloadTextButton: document.querySelector("#downloadTextButton"),
   nextStepCard: document.querySelector("#nextStepCard"),
   nextStepText: document.querySelector("#nextStepText"),
+  attackChainSection: document.querySelector("#attackChainSection"),
+  attackChain: document.querySelector("#attackChain"),
+  attackNext: document.querySelector("#attackNext"),
+  safeReplySection: document.querySelector("#safeReplySection"),
+  safeReplies: document.querySelector("#safeReplies"),
   linkCheckSection: document.querySelector("#linkCheckSection"),
   linkCheckList: document.querySelector("#linkCheckList"),
   quickLinkInput: document.querySelector("#quickLinkInput"),
@@ -57,12 +63,18 @@ const el = {
   modeKeyRow: document.querySelector("#modeKeyRow"),
   geminiKeyInput: document.querySelector("#geminiKeyInput"),
   modeConfirm: document.querySelector("#modeConfirm"),
-  modeSwitchButton: document.querySelector("#modeSwitchButton")
+  modeSwitchButton: document.querySelector("#modeSwitchButton"),
+  qrButton: document.querySelector("#qrButton"),
+  kbGuideButton: document.querySelector("#kbGuideButton"),
+  kbGuideFooter: document.querySelector("#kbGuideFooter"),
+  kbModal: document.querySelector("#kbModal"),
+  kbModalClose: document.querySelector("#kbModalClose"),
+  kbGrid: document.querySelector("#kbGrid")
 };
 
 let lastResult = null;
-let previewUrl = null;
-let currentImageFile = null;
+let images = [];   // 多張截圖：{ file, url }，依序辨識合併
+const MAX_IMAGES = 8;
 let tesseractLoader = null;
 let llmAvailable = false;
 let analyzeSeq = 0;
@@ -100,10 +112,12 @@ async function checkHealth() {
 function applyModeStatus() {
   if (currentMode === "online") {
     setServerStatus("雲端模式（Gemini）", "ok");
-    el.ocrButton.textContent = "用 Gemini 看圖";
+    el.ocrButton.textContent = "用 Gemini 看圖（VLM）";
+    el.dropHint.textContent = "按「用 Gemini 看圖（VLM）」雲端辨識，多張會一起判讀。";
   } else {
     setServerStatus("離線模式（本機）", "ok");
     el.ocrButton.textContent = "辨識文字 OCR";
+    el.dropHint.textContent = "按「辨識文字 OCR」本機離線辨識，首次使用需連網下載語言包。";
   }
 }
 
@@ -169,6 +183,7 @@ function initModeModal() {
 }
 
 const TESSERACT_CDN = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+const JSQR_CDN = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
 const OCR_RECOGNITION_OPTIONS = {
   preserve_interword_spaces: "0",
   tessedit_pageseg_mode: "11",
@@ -272,7 +287,7 @@ function loadTesseract() {
 }
 
 async function runOcr() {
-  if (!currentImageFile) return;
+  if (!images.length) return;
   clearError();
   el.ocrButton.disabled = true;
   const original = el.ocrButton.textContent;
@@ -280,31 +295,33 @@ async function runOcr() {
   setImageStatus("OCR 辨識中，首次使用需下載繁中語言包...");
   try {
     const Tesseract = await loadTesseract();
-    const { data } = await Tesseract.recognize(currentImageFile, "chi_tra+eng", {
-      ...OCR_RECOGNITION_OPTIONS,
-      logger: (m) => {
-        if (m.status === "recognizing text") {
-          setImageStatus(`辨識中 ${(m.progress * 100).toFixed(0)}%`);
+    const parts = [];
+    for (let i = 0; i < images.length; i++) {
+      const { data } = await Tesseract.recognize(images[i].file, "chi_tra+eng", {
+        ...OCR_RECOGNITION_OPTIONS,
+        logger: (m) => {
+          if (m.status === "recognizing text") {
+            setImageStatus(`辨識中 ${i + 1}/${images.length} · ${(m.progress * 100).toFixed(0)}%`);
+          }
         }
-      }
-    });
-    const rawText = (data.text || "").trim();
-    if (!rawText) {
+      });
+      const raw = (data.text || "").trim();
+      if (raw) parts.push(cleanOcrText(raw) || raw);
+    }
+    const text = parts.join("\n");
+    if (!text) {
       setImageStatus("未辨識到文字，請改用更清晰的截圖。");
       return;
     }
-    const cleanedText = cleanOcrText(rawText);
-    const text = cleanedText || rawText;
     el.tradeText.value = text;
-    const removed = Math.max(0, rawText.length - text.length);
-    setImageStatus(`已辨識 ${rawText.length} 字，自動清理 ${removed} 字，已填入下方文字欄`);
+    setImageStatus(`已辨識 ${images.length} 張、共 ${text.length} 字，已填入下方文字欄`);
     el.tradeText.focus();
   } catch (error) {
     setImageStatus("OCR 失敗");
     showError(error.message || "OCR 失敗，請改用手機/電腦 OCR 後貼上文字。");
   } finally {
     el.ocrButton.textContent = original;
-    el.ocrButton.disabled = !currentImageFile;
+    el.ocrButton.disabled = images.length === 0;
   }
 }
 
@@ -332,9 +349,9 @@ function downscaleImage(file, maxEdge = 1280, quality = 0.8) {
   });
 }
 
-// 線上版：截圖交給後端代呼叫 Gemini 多模態（VLM）逐字轉錄。
+// 線上版：多張截圖一起交給後端代呼叫 Gemini 多模態（VLM）逐字轉錄。
 async function runVlm() {
-  if (!currentImageFile) return;
+  if (!images.length) return;
   if (!geminiKey) {
     showError("線上版看圖需先輸入 Gemini API key。");
     openModeModal();
@@ -344,13 +361,14 @@ async function runVlm() {
   el.ocrButton.disabled = true;
   const original = el.ocrButton.textContent;
   el.ocrButton.textContent = "看圖中...";
-  setImageStatus("Gemini 看圖辨識中...");
+  setImageStatus(`Gemini 看圖辨識中（${images.length} 張）...`);
   try {
-    const dataUrl = await downscaleImage(currentImageFile);
+    const dataUrls = [];
+    for (const item of images) dataUrls.push(await downscaleImage(item.file));
     const response = await fetch("/api/vlm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image: dataUrl, geminiKey })
+      body: JSON.stringify({ images: dataUrls, geminiKey })
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "看圖失敗");
@@ -360,20 +378,188 @@ async function runVlm() {
       return;
     }
     el.tradeText.value = text;
-    setImageStatus(`Gemini 已讀出 ${text.length} 字，已填入下方文字欄`);
+    setImageStatus(`Gemini 已讀出 ${images.length} 張、共 ${text.length} 字，已填入下方文字欄`);
     el.tradeText.focus();
   } catch (error) {
     setImageStatus("看圖失敗");
     showError(error.message || "Gemini 看圖失敗，請確認金鑰或改用離線 OCR。");
   } finally {
     el.ocrButton.textContent = original;
-    el.ocrButton.disabled = !currentImageFile;
+    el.ocrButton.disabled = images.length === 0;
   }
 }
 
 // 依模式分流：離線→tesseract OCR；線上→Gemini VLM。
 function recognizeImage() {
   return currentMode === "online" ? runVlm() : runOcr();
+}
+
+// ---- QR Code 解析（前端 jsQR）→ 接既有連結/電話查核 ----
+
+let jsqrLoader = null;
+function loadJsQR() {
+  if (window.jsQR) return Promise.resolve(window.jsQR);
+  if (jsqrLoader) return jsqrLoader;
+  jsqrLoader = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = JSQR_CDN;
+    script.onload = () => resolve(window.jsQR);
+    script.onerror = () => reject(new Error("無法載入 QR 函式庫（需連網）。"));
+    document.head.append(script);
+  });
+  return jsqrLoader;
+}
+
+function decodeQrFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      const data = ctx.getImageData(0, 0, w, h);
+      const code = window.jsQR(data.data, w, h);
+      resolve(code ? code.data : null);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("無法讀取圖片"));
+    };
+    img.src = url;
+  });
+}
+
+async function runQrScan() {
+  if (!images.length) return;
+  clearError();
+  el.qrButton.disabled = true;
+  const original = el.qrButton.textContent;
+  el.qrButton.textContent = "解析中...";
+  setImageStatus("解析 QR Code 中...");
+  try {
+    await loadJsQR();
+    const found = [];
+    for (const item of images) {
+      const decoded = await decodeQrFromFile(item.file);
+      if (decoded && !found.includes(decoded)) found.push(decoded);
+    }
+    if (!found.length) {
+      setImageStatus("未在截圖中找到 QR Code（請確認 QR 清晰、未被裁切）。");
+      return;
+    }
+    // 把解出的內容丟給既有的連結/電話查核（黑名單 + 啟發式）。
+    const joined = found.join("\n");
+    el.quickLinkInput.value = found.length === 1 ? found[0] : joined;
+    setImageStatus(`解出 ${found.length} 個 QR 內容，已送查核`);
+    const response = await fetch("/api/check-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: joined })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "查核失敗");
+    renderQuickResult(data);
+    el.quickCheckResult.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (error) {
+    setImageStatus("QR 解析失敗");
+    showError(error.message || "QR 解析失敗，請改用清晰截圖或手動貼上連結。");
+  } finally {
+    el.qrButton.textContent = original;
+    el.qrButton.disabled = images.length === 0;
+  }
+}
+
+// ---- 詐騙樣態圖鑑 modal ----
+
+let kbCache = null;
+async function loadKnowledgeBase() {
+  if (kbCache) return kbCache;
+  const response = await fetch("/api/knowledge-base");
+  if (!response.ok) throw new Error("無法載入知識庫");
+  kbCache = await response.json();
+  return kbCache;
+}
+
+function renderKbCards(items) {
+  el.kbGrid.innerHTML = "";
+  for (const item of items) {
+    const card = document.createElement("article");
+    card.className = "kb-card";
+
+    const head = document.createElement("div");
+    head.className = "kb-card-head";
+    const title = document.createElement("h3");
+    title.textContent = item.title || item.id;
+    head.append(title);
+    if ((item.source || "").includes("政府開放資料")) {
+      const badge = document.createElement("span");
+      badge.className = "kb-badge";
+      badge.textContent = "政府開放資料";
+      head.append(badge);
+    }
+    card.append(head);
+
+    const chips = document.createElement("div");
+    chips.className = "kb-chips";
+    for (const sig of (item.risk_signals || []).slice(0, 8)) {
+      const chip = document.createElement("span");
+      chip.className = "kb-chip";
+      chip.textContent = sig;
+      chips.append(chip);
+    }
+    if (chips.childElementCount) card.append(chips);
+
+    if (item.guidance) {
+      const guidance = document.createElement("p");
+      guidance.className = "kb-guidance";
+      guidance.textContent = item.guidance;
+      card.append(guidance);
+    }
+
+    if (item.source_url) {
+      const source = document.createElement("a");
+      source.className = "kb-source";
+      source.href = item.source_url;
+      source.target = "_blank";
+      source.rel = "noreferrer";
+      source.textContent = `來源：${item.source || "查看"} ↗`;
+      card.append(source);
+    }
+    el.kbGrid.append(card);
+  }
+}
+
+async function openKbModal() {
+  el.kbModal.hidden = false;
+  if (kbCache) return;
+  el.kbGrid.innerHTML = '<p class="kb-loading">載入中…</p>';
+  try {
+    renderKbCards(await loadKnowledgeBase());
+  } catch {
+    el.kbGrid.innerHTML = '<p class="kb-loading">載入失敗，請重整再試。</p>';
+  }
+}
+
+function closeKbModal() {
+  el.kbModal.hidden = true;
+}
+
+function initKbModal() {
+  el.kbGuideButton.addEventListener("click", openKbModal);
+  if (el.kbGuideFooter) el.kbGuideFooter.addEventListener("click", openKbModal);
+  el.kbModalClose.addEventListener("click", closeKbModal);
+  el.kbModal.addEventListener("click", (event) => {
+    if (event.target === el.kbModal) closeKbModal();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !el.kbModal.hidden) closeKbModal();
+  });
 }
 
 function showError(message) {
@@ -703,12 +889,14 @@ function renderResult(result, options = {}) {
   el.timestamp.textContent = new Date().toLocaleString("zh-TW");
 
   renderSynthesis(result, Boolean(options.llmPending));
+  renderAttackChain(result);
   renderHighlights(result);
   renderLinkCheck(result);
   renderChips(result["可疑訊號"]);
   renderEvidence(result["引用到的防詐依據"]);
   renderList(el.actions, result["建議行動"]);
   renderList(el.questions, result["可問賣家的查證問題"]);
+  renderSafeReplies(result["安全回覆建議"]);
   renderList(el.pseudoQueries, result.pseudo_queries);
   el.hydeText.textContent = result["HyDE假想文件"] || "尚未產生。";
   el.nextStepText.textContent = nextStepFor(level);
@@ -720,53 +908,147 @@ function renderResult(result, options = {}) {
   el.downloadTextButton.disabled = false;
 }
 
+function renderAttackChain(result) {
+  const chain = result["攻擊鏈"];
+  if (!chain || !Array.isArray(chain.stages)) {
+    el.attackChainSection.hidden = true;
+    return;
+  }
+  el.attackChain.innerHTML = "";
+  const current = Number(chain.current_stage || 0);
+  for (const stage of chain.stages) {
+    const node = document.createElement("div");
+    let cls = "chain-stage";
+    if (stage.id === current) cls += " current";
+    else if (stage.detected && stage.id < current) cls += " passed";
+    node.className = cls;
+
+    const dot = document.createElement("span");
+    dot.className = "chain-dot";
+    dot.textContent = stage.id;
+    const name = document.createElement("span");
+    name.className = "chain-name";
+    name.textContent = stage.name;
+    node.append(dot, name);
+
+    if (stage.hits && stage.hits.length) {
+      const hits = document.createElement("span");
+      hits.className = "chain-hits";
+      hits.textContent = stage.hits.slice(0, 3).join("、");
+      node.append(hits);
+    }
+    el.attackChain.append(node);
+  }
+  el.attackNext.textContent = `預測下一步：${chain.next_prediction || ""}`;
+  el.attackChainSection.hidden = false;
+}
+
+function renderSafeReplies(replies) {
+  const list = Array.isArray(replies) ? replies : [];
+  el.safeReplies.innerHTML = "";
+  if (!list.length) {
+    el.safeReplySection.hidden = true;
+    return;
+  }
+  for (const text of list) {
+    const row = document.createElement("div");
+    row.className = "safe-reply";
+    const para = document.createElement("p");
+    para.className = "safe-reply-text";
+    para.textContent = text;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-button compact-button safe-reply-copy";
+    button.textContent = "複製";
+    button.addEventListener("click", () => copyText(text, button, "已複製"));
+    row.append(para, button);
+    el.safeReplies.append(row);
+  }
+  el.safeReplySection.hidden = false;
+}
+
 function setImageStatus(message) {
   el.imageStatus.textContent = message;
 }
 
-function clearImage() {
-  if (previewUrl) {
-    URL.revokeObjectURL(previewUrl);
-    previewUrl = null;
-  }
-  el.imagePreview.hidden = true;
-  el.imagePreview.removeAttribute("src");
-  el.dropEmpty.hidden = false;
-  el.clearImageButton.disabled = true;
-  el.ocrButton.disabled = true;
-  el.imageInput.value = "";
-  currentImageFile = null;
-  setImageStatus("尚未載入圖片");
-  setReadyStatus();
+// 重畫縮圖牆，並依是否有圖切換空狀態與按鈕可用性。
+function renderThumbs() {
+  el.imageThumbs.innerHTML = "";
+  images.forEach((item, i) => {
+    const thumb = document.createElement("div");
+    thumb.className = "image-thumb";
+
+    const img = document.createElement("img");
+    img.src = item.url;
+    img.alt = `截圖 ${i + 1}`;
+
+    const idx = document.createElement("span");
+    idx.className = "image-thumb-index";
+    idx.textContent = i + 1;
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "image-thumb-remove";
+    remove.title = "移除這張";
+    remove.setAttribute("aria-label", `移除截圖 ${i + 1}`);
+    remove.textContent = "×";
+    remove.addEventListener("click", () => removeImageAt(i));
+
+    thumb.append(img, idx, remove);
+    el.imageThumbs.append(thumb);
+  });
+  const has = images.length > 0;
+  el.imageThumbs.hidden = !has;
+  el.dropEmpty.hidden = has;
+  el.clearImageButton.disabled = !has;
+  el.ocrButton.disabled = !has;
+  el.qrButton.disabled = !has;
 }
 
-function loadImageFile(file) {
-  if (!file) return;
-  if (!file.type.startsWith("image/")) {
-    setImageStatus("請選擇圖片檔");
+function addImages(fileList) {
+  const incoming = Array.from(fileList || []).filter((f) => f && f.type.startsWith("image/"));
+  if (!incoming.length) {
+    if (fileList && fileList.length) setImageStatus("請選擇圖片檔");
     return;
   }
+  let added = 0;
+  for (const file of incoming) {
+    if (images.length >= MAX_IMAGES) break;
+    images.push({ file, url: URL.createObjectURL(file) });
+    added++;
+  }
+  renderThumbs();
+  el.imageInput.value = "";
+  const skipped = incoming.length - added;
+  const note = skipped > 0 ? `（已達上限 ${MAX_IMAGES} 張，略過 ${skipped} 張）` : "";
+  setImageStatus(`已載入 ${images.length} 張截圖${note}`);
+}
 
-  if (previewUrl) URL.revokeObjectURL(previewUrl);
-  previewUrl = URL.createObjectURL(file);
-  currentImageFile = file;
-  el.imagePreview.src = previewUrl;
-  el.imagePreview.hidden = false;
-  el.dropEmpty.hidden = true;
-  el.clearImageButton.disabled = false;
-  el.ocrButton.disabled = false;
-  setImageStatus(`${file.name || "截圖"} · ${(file.size / 1024).toFixed(0)} KB`);
-  setReadyStatus("截圖已載入");
+function removeImageAt(index) {
+  const item = images[index];
+  if (item) URL.revokeObjectURL(item.url);
+  images.splice(index, 1);
+  renderThumbs();
+  setImageStatus(images.length ? `目前 ${images.length} 張截圖` : "尚未載入圖片");
+}
+
+function clearImages() {
+  for (const item of images) URL.revokeObjectURL(item.url);
+  images = [];
+  renderThumbs();
+  el.imageInput.value = "";
+  setImageStatus("尚未載入圖片");
 }
 
 function imageFromPaste(event) {
   const items = Array.from(event.clipboardData?.items || []);
-  const imageItem = items.find((item) => item.type.startsWith("image/"));
-  if (!imageItem) return;
-  const file = imageItem.getAsFile();
-  if (!file) return;
+  const files = items
+    .filter((item) => item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  if (!files.length) return;
   event.preventDefault();
-  loadImageFile(file);
+  addImages(files);
 }
 
 async function postAnalyze(text, withLlm) {
@@ -867,11 +1149,12 @@ document.querySelectorAll("[data-sample]").forEach((button) => {
 });
 
 el.imageInput.addEventListener("change", (event) => {
-  loadImageFile(event.target.files?.[0]);
+  addImages(event.target.files);
 });
 
-el.clearImageButton.addEventListener("click", clearImage);
+el.clearImageButton.addEventListener("click", clearImages);
 el.ocrButton.addEventListener("click", recognizeImage);
+el.qrButton.addEventListener("click", runQrScan);
 el.cleanTextButton.addEventListener("click", cleanTradeText);
 el.printButton.addEventListener("click", () => {
   if (lastResult) window.print();
@@ -909,7 +1192,7 @@ el.dropZone.addEventListener("dragleave", () => {
 el.dropZone.addEventListener("drop", (event) => {
   event.preventDefault();
   el.dropZone.classList.remove("dragging");
-  loadImageFile(event.dataTransfer?.files?.[0]);
+  addImages(event.dataTransfer?.files);
 });
 
 document.addEventListener("paste", imageFromPaste);
@@ -931,5 +1214,6 @@ el.clearButton.addEventListener("click", () => {
 
 el.tradeText.value = samples.high;
 initModeModal();
+initKbModal();
 openModeModal();   // 載入時請使用者先選離線/線上模式
 checkHealth();
