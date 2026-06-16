@@ -65,6 +65,14 @@ const el = {
   geminiKeyInput: document.querySelector("#geminiKeyInput"),
   modeConfirm: document.querySelector("#modeConfirm"),
   modeSwitchButton: document.querySelector("#modeSwitchButton"),
+  llmSetup: document.querySelector("#llmSetup"),
+  llmSetupStatus: document.querySelector("#llmSetupStatus"),
+  llmProgress: document.querySelector("#llmProgress"),
+  llmProgressFill: document.querySelector("#llmProgressFill"),
+  llmProgressText: document.querySelector("#llmProgressText"),
+  llmDownloadBtn: document.querySelector("#llmDownloadBtn"),
+  llmRecheckBtn: document.querySelector("#llmRecheckBtn"),
+  llmSkipBtn: document.querySelector("#llmSkipBtn"),
   qrButton: document.querySelector("#qrButton"),
   kbGuideButton: document.querySelector("#kbGuideButton"),
   kbGuideFooter: document.querySelector("#kbGuideFooter"),
@@ -82,6 +90,9 @@ let analyzeSeq = 0;
 let currentMode = null;   // "offline" | "online"，由啟動 modal 決定
 let geminiKey = "";       // 線上版金鑰：僅存記憶體、不寫 localStorage、重整即清
 let pendingMode = null;   // modal 內暫存的選擇
+let llmReady = false;     // 本機 LLM（gemma3:4b）是否就緒
+let llmSkipRules = false; // 離線版逃生口：改用純規則（不需 LLM）
+let llmPollTimer = null;  // 下載進度輪詢計時器
 
 // state: "ok"（已連線/完成）｜"busy"（分析中）｜"err"（未連線/失敗），決定狀態列左側色條。
 function setServerStatus(text, state = "ok") {
@@ -127,9 +138,106 @@ function shouldUseLlm() {
 }
 
 function refreshModeConfirm() {
-  const ready = pendingMode === "offline"
-    || (pendingMode === "online" && el.geminiKeyInput.value.trim().length > 0);
-  el.modeConfirm.disabled = !ready;
+  const offlineOk = pendingMode === "offline" && (llmReady || llmSkipRules);
+  const onlineOk = pendingMode === "online" && el.geminiKeyInput.value.trim().length > 0;
+  el.modeConfirm.disabled = !(offlineOk || onlineOk);
+}
+
+// ---- 離線版：本機 LLM 狀態 / 下載 ----
+
+function stopLlmPoll() {
+  if (llmPollTimer) {
+    clearInterval(llmPollTimer);
+    llmPollTimer = null;
+  }
+}
+
+async function checkLlmStatus() {
+  stopLlmPoll();
+  el.llmProgress.hidden = true;
+  el.llmDownloadBtn.hidden = true;
+  el.llmRecheckBtn.hidden = true;
+  el.llmSetupStatus.textContent = "檢查本機 LLM 狀態中…";
+  el.llmSetupStatus.className = "llm-setup-status";
+  let status;
+  try {
+    status = await (await fetch("/api/llm-status")).json();
+  } catch {
+    status = { ollama: false, ready: false };
+  }
+  if (status.ready) {
+    llmReady = true;
+    llmAvailable = true;
+    el.llmSetupStatus.textContent = `✓ 本機 LLM 已就緒（${status.model || "gemma3:4b"}），分析會加上小模型研判。`;
+    el.llmSetupStatus.className = "llm-setup-status ok";
+    el.llmSkipBtn.hidden = true;
+  } else if (status.ollama) {
+    llmReady = false;
+    el.llmSetupStatus.textContent = "尚未下載本機 LLM 模型，下載後離線也能用小模型研判。";
+    el.llmDownloadBtn.hidden = false;
+    el.llmSkipBtn.hidden = false;
+  } else {
+    llmReady = false;
+    el.llmSetupStatus.textContent = "本機 LLM 服務未啟動。請執行 Start-UI.ps1（會自動啟動 Ollama）後按重新檢查。";
+    el.llmRecheckBtn.hidden = false;
+    el.llmSkipBtn.hidden = false;
+  }
+  refreshModeConfirm();
+}
+
+function pollPullProgress() {
+  stopLlmPoll();
+  llmPollTimer = setInterval(async () => {
+    let p;
+    try {
+      p = await (await fetch("/api/llm-pull-progress")).json();
+    } catch {
+      return;
+    }
+    el.llmProgressFill.style.width = `${p.percent || 0}%`;
+    el.llmProgressText.textContent = p.error ? "下載失敗" : `${p.percent || 0}%　${p.status || ""}`;
+    if (p.done) {
+      stopLlmPoll();
+      if (p.error) {
+        el.llmSetupStatus.textContent = `下載失敗：${p.error}`;
+        el.llmDownloadBtn.hidden = false;
+      } else {
+        checkLlmStatus();   // 下載完成 → 重新檢查 → 就緒
+      }
+    }
+  }, 1500);
+}
+
+async function startLlmDownload() {
+  el.llmDownloadBtn.hidden = true;
+  el.llmProgress.hidden = false;
+  el.llmProgressFill.style.width = "0%";
+  el.llmProgressText.textContent = "準備下載…";
+  el.llmSetupStatus.textContent = "正在下載本機 LLM（約 3.3GB，依網速數分鐘）…";
+  try {
+    const resp = await fetch("/api/llm-pull", { method: "POST" });
+    if (!resp.ok) {
+      const data = await resp.json();
+      throw new Error(data.error || "下載啟動失敗");
+    }
+  } catch (error) {
+    el.llmProgress.hidden = true;
+    el.llmDownloadBtn.hidden = false;
+    el.llmSetupStatus.textContent = error.message || "下載啟動失敗，請確認 Ollama 已啟動。";
+    return;
+  }
+  pollPullProgress();
+}
+
+function skipLlmToRules() {
+  llmSkipRules = true;
+  llmAvailable = false;
+  stopLlmPoll();
+  el.llmProgress.hidden = true;
+  el.llmDownloadBtn.hidden = true;
+  el.llmSetupStatus.textContent = "已選擇純規則模式：規則引擎＋知識庫＋RAG，不使用小模型。";
+  el.llmSetupStatus.className = "llm-setup-status";
+  refreshModeConfirm();
 }
 
 function selectPendingMode(mode) {
@@ -138,24 +246,33 @@ function selectPendingMode(mode) {
     btn.classList.toggle("active", btn.dataset.mode === mode);
   }
   el.modeKeyRow.hidden = mode !== "online";
-  if (mode === "online") el.geminiKeyInput.focus();
+  el.llmSetup.hidden = mode !== "offline";
+  if (mode === "online") {
+    el.geminiKeyInput.focus();
+  } else {
+    llmSkipRules = false;
+    checkLlmStatus();   // 即時偵測本機 LLM（修好「啟動時偵測一次就過時」的問題）
+  }
   refreshModeConfirm();
 }
 
 function openModeModal() {
   pendingMode = currentMode;
+  llmSkipRules = false;
   el.geminiKeyInput.value = geminiKey;   // 同一 session 重開時回填，仍只在記憶體
   if (currentMode) selectPendingMode(currentMode);
   else {
     pendingMode = null;
     for (const btn of el.modeModal.querySelectorAll(".mode-choice")) btn.classList.remove("active");
     el.modeKeyRow.hidden = true;
+    el.llmSetup.hidden = true;
     el.modeConfirm.disabled = true;
   }
   el.modeModal.hidden = false;
 }
 
 function closeModeModal() {
+  stopLlmPoll();
   el.modeModal.hidden = true;
 }
 
@@ -163,6 +280,7 @@ function confirmMode() {
   if (!pendingMode) return;
   currentMode = pendingMode;
   geminiKey = currentMode === "online" ? el.geminiKeyInput.value.trim() : "";
+  if (currentMode === "offline") llmAvailable = llmReady && !llmSkipRules;
   closeModeModal();
   applyModeStatus();
 }
@@ -175,6 +293,9 @@ function initModeModal() {
   el.geminiKeyInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !el.modeConfirm.disabled) confirmMode();
   });
+  el.llmDownloadBtn.addEventListener("click", startLlmDownload);
+  el.llmRecheckBtn.addEventListener("click", checkLlmStatus);
+  el.llmSkipBtn.addEventListener("click", skipLlmToRules);
   el.modeConfirm.addEventListener("click", confirmMode);
   el.modeSwitchButton.addEventListener("click", openModeModal);
   // 已選過模式才允許點背景關閉（避免首次未選就略過）。

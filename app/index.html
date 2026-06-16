@@ -26,6 +26,18 @@
           <input id="geminiKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="貼上你的 Gemini API key" />
           <p class="mode-key-hint">於 Google AI Studio 取得；僅本次分析使用，不會存到伺服器或瀏覽器。</p>
         </div>
+        <div class="llm-setup" id="llmSetup" hidden>
+          <p class="llm-setup-status" id="llmSetupStatus">檢查本機 LLM 狀態中…</p>
+          <div class="llm-progress" id="llmProgress" hidden>
+            <div class="llm-progress-track"><div class="llm-progress-fill" id="llmProgressFill"></div></div>
+            <span class="llm-progress-text" id="llmProgressText">0%</span>
+          </div>
+          <div class="llm-setup-actions">
+            <button class="secondary-button compact-button" id="llmDownloadBtn" type="button" hidden>下載 LLM（gemma3:4b，約 3.3GB）</button>
+            <button class="secondary-button compact-button" id="llmRecheckBtn" type="button" hidden>重新檢查</button>
+            <button class="link-button" id="llmSkipBtn" type="button" hidden>改用純規則模式（不需 LLM）</button>
+          </div>
+        </div>
         <div class="mode-modal-actions">
           <button id="modeConfirm" class="primary-button" type="button" disabled>開始使用</button>
         </div>
@@ -36,7 +48,7 @@
         <header class="topbar">
           <div class="brand-lockup">
             <div>
-              <p class="eyebrow">期末專案｜二手交易防詐風險分析</p>
+              <p class="eyebrow">FB／蝦皮／Threads 二手交易防詐</p>
               <h1>二手交易 AI 防踩雷助理</h1>
             </div>
           </div>
@@ -48,12 +60,12 @@
 
         <section class="hero-panel">
           <div class="hero-copy">
-            <span class="section-label">專案功能</span>
+            <span class="section-label">主要功能</span>
             <h2>把 FB／Threads 二手交易訊息，整理成可查證的防詐報告</h2>
-            <p>貼上交易貼文、私訊或截圖 OCR 文字後，系統會標出可疑話術、判斷風險等級、列出查證問題，並保留 RAG 引用與推理軌跡供課堂 demo 說明。</p>
+            <p>貼上交易貼文、私訊或截圖 OCR 文字後，系統會標出可疑話術、判斷風險等級、列出查證問題，並保留 RAG 引用與推理軌跡，讓每個判斷都有依據、可查證。</p>
             <button class="secondary-button kb-guide-button" id="kbGuideButton" type="button">📖 詐騙樣態圖鑑（16 類）</button>
           </div>
-          <div class="feature-grid" aria-label="專案功能清單">
+          <div class="feature-grid" aria-label="主要功能清單">
             <article class="feature-item">
               <span>01</span>
               <strong>截圖 OCR／VLM 與文字清理</strong>
@@ -278,7 +290,7 @@
         <section class="detail-panel">
           <div>
             <h2>檢索推理軌跡</h2>
-            <p>這一區顯示 pseudo-query 與 HyDE 假想文件，方便報告展示「不是只靠 LLM 直覺回答」。</p>
+            <p>這一區顯示 pseudo-query 與 HyDE 假想文件，呈現判斷不是只靠 LLM 直覺，而是有檢索依據。</p>
           </div>
           <div class="trace-grid">
             <div>

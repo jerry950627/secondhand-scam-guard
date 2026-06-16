@@ -1666,3 +1666,62 @@ ol {
     align-items: stretch;
   }
 }
+
+/* ---- 離線版：本機 LLM 設定區 ---- */
+
+.llm-setup {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(27, 138, 143, 0.05);
+}
+
+.llm-setup-status {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.llm-setup-status.ok {
+  color: var(--green-text);
+  font-weight: 700;
+}
+
+.llm-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.llm-progress-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(17, 26, 34, 0.1);
+  overflow: hidden;
+}
+
+.llm-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--teal);
+  transition: width 0.3s ease;
+}
+
+.llm-progress-text {
+  min-width: 96px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.llm-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}

@@ -14,6 +14,9 @@ __pycache__/
 # 開發過程產物（非繳交內容）
 outputs/
 
+# 簡報：另外繳交給老師，不上 GitHub
+*.pptx
+
 # Claude Code 本機設定
 .claude/
 

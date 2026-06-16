@@ -3,7 +3,10 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import threading
 import traceback
+import urllib.error
+import urllib.request
 from urllib.parse import parse_qs, unquote
 
 
@@ -17,6 +20,81 @@ MAX_VLM_BYTES = 6 * 1024 * 1024  # /api/vlm 帶 base64 影像，放寬上限
 MAX_VLM_IMAGES = 8  # /api/vlm 單次最多張數
 MAX_TEXT_CHARS = 8000  # 分析文字長度上限
 MAX_KEY_CHARS = 200  # Gemini API key 長度上限，防呆
+
+# 離線本機 LLM（Ollama）設定，供「介面內下載/啟用」用。
+OLLAMA_BASE = os.environ.get("SCAM_LLM_BASE_URL", "http://localhost:11434").rstrip("/")
+LLM_MODEL = os.environ.get("SCAM_LLM_MODEL", "gemma3:4b").strip()
+
+# 模型下載進度（背景執行緒更新，前端輪詢）。
+_pull = {"status": "idle", "percent": 0, "done": False, "error": None, "running": False}
+_pull_lock = threading.Lock()
+
+
+def _ollama_models():
+    """回傳 Ollama 已安裝模型名稱清單；連不到回 None。"""
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_BASE}/api/tags", timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return [str(m.get("name", "")) for m in data.get("models", [])]
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def llm_status():
+    models = _ollama_models()
+    if models is None:
+        return {"ollama": False, "model_present": False, "model": LLM_MODEL, "ready": False}
+    base = LLM_MODEL.split(":", 1)[0]
+    present = any(m == LLM_MODEL or m.split(":", 1)[0] == base for m in models)
+    return {"ollama": True, "model_present": present, "model": LLM_MODEL, "ready": present}
+
+
+def _do_pull():
+    """串流 Ollama /api/pull，邊下載邊更新 _pull 進度。"""
+    try:
+        body = json.dumps({"name": LLM_MODEL, "stream": True}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{OLLAMA_BASE}/api/pull", data=body,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=None) as resp:
+            for raw in resp:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    msg = json.loads(raw.decode("utf-8"))
+                except ValueError:
+                    continue
+                total, completed = msg.get("total"), msg.get("completed")
+                with _pull_lock:
+                    _pull["status"] = str(msg.get("status", ""))
+                    if total and completed:
+                        _pull["percent"] = max(_pull["percent"], int(completed / total * 100))
+                    if msg.get("error"):
+                        _pull["error"] = str(msg["error"])[:160]
+        with _pull_lock:
+            if not _pull["error"]:
+                _pull["status"], _pull["percent"] = "success", 100
+            _pull["done"], _pull["running"] = True, False
+    except Exception as exc:  # noqa: BLE001 - 下載失敗也要回報，不讓執行緒默默死掉
+        with _pull_lock:
+            _pull["error"], _pull["done"], _pull["running"] = str(exc)[:160], True, False
+
+
+def start_pull():
+    """啟動背景下載（已在下載中則回現況）。"""
+    with _pull_lock:
+        if _pull["running"]:
+            return {"started": False, "running": True}
+        _pull.update({"status": "starting", "percent": 0, "done": False, "error": None, "running": True})
+    threading.Thread(target=_do_pull, daemon=True).start()
+    return {"started": True, "running": True}
+
+
+def pull_progress():
+    with _pull_lock:
+        return dict(_pull)
 
 
 def write_log(message):
@@ -60,13 +138,28 @@ class ScamGuardHandler(SimpleHTTPRequestHandler):
             # 供前端「詐騙樣態圖鑑」瀏覽 16 類知識庫。
             self._send_json(demo.knowledge_base())
             return
+        if self.path.split("?", 1)[0] == "/api/llm-status":
+            # 離線本機 LLM（Ollama gemma3:4b）是否就緒，供 modal 顯示。
+            self._send_json(llm_status())
+            return
+        if self.path.split("?", 1)[0] == "/api/llm-pull-progress":
+            self._send_json(pull_progress())
+            return
         return super().do_GET()
 
     def do_POST(self):
         raw_path, _, query = self.path.partition("?")
         path = unquote(raw_path)
-        if path not in {"/api/analyze", "/api/check-link", "/api/vlm"}:
+        if path not in {"/api/analyze", "/api/check-link", "/api/vlm", "/api/llm-pull"}:
             self.send_error(404, "Not Found")
+            return
+
+        if path == "/api/llm-pull":
+            # 觸發下載本機 LLM（不需 body）。Ollama 沒起來則回 409。
+            if not llm_status()["ollama"]:
+                self._send_json({"error": "Ollama 未啟動，請先執行 Start-UI.ps1。"}, status=409)
+                return
+            self._send_json(start_pull())
             return
         # ?llm=0 → 只跑規則引擎（即時回應，供前端漸進式渲染）。
         params = parse_qs(query)
